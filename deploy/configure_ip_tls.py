@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+from itertools import chain
 import json
 import os
 from pathlib import Path
@@ -68,20 +69,22 @@ def endpoint(host, port):
     return str(address), port
 
 
-def select_port(hub_port):
-    port = 1115
-    if hub_port == port:
-        raise RuntimeError("1115 is reserved for the public HTTPS endpoint; use another internal hub port")
-    with socket.socket() as sock:
-        try:
-            sock.bind(("0.0.0.0", port))
-        except OSError as exc:
-            # Repeat deployment may find our own nginx listener already running.
-            text = HTTPS.read_text() if HTTPS.exists() else ""
-            if f"listen {port} ssl;" in text and text.startswith("# Managed by XiaoA IP TLS."):
-                return port
-            raise RuntimeError("Public HTTPS port 1115 is occupied; existing service was left unchanged") from exc
-    return port
+def select_port(hub_port, previous=0):
+    candidates = chain((previous,) if previous else (), range(1115, 65536))
+    for port in candidates:
+        if port == hub_port or not 1024 <= port <= 65535:
+            continue
+        with socket.socket() as sock:
+            try:
+                sock.bind(("0.0.0.0", port))
+            except OSError:
+                # Reuse our nginx listener when updating an existing deployment.
+                text = HTTPS.read_text() if HTTPS.exists() else ""
+                if text.startswith("# Managed by XiaoA IP TLS.") and f"listen {port} ssl;" in text:
+                    return port
+                continue
+            return port
+    raise RuntimeError("No free HTTPS port; existing service was left unchanged")
 
 
 def firewall(port):
@@ -230,7 +233,7 @@ def configure(host, hub_port, *, dry_run=False):
     previous = json.loads(STATE.read_text()) if STATE.exists() else {}
     if previous and previous.get("host") != host:
         raise RuntimeError("IP changed; migrate the existing IP certificate explicitly")
-    web_port = select_port(hub_port)
+    web_port = select_port(hub_port, int(previous.get("web_port", 0)))
     # Refuse an existing IP virtual host owned by another application.
     current = run("nginx", "-T")
     foreign = current

@@ -903,7 +903,7 @@
     </section>
     <div class="msg" id="connection_preview" role="status" aria-live="polite"></div>
     <div class="hint">连接成功后会自动完成并保存连接所需的安全配置；以后启动小A会自动连接。</div>
-    <div class="hint">云端网页与电脑连接共用 TCP 1115 端口。部署会配置服务器系统防火墙，还需在云服务商安全组放行 TCP 80 和 TCP 1115；1115 被其他服务占用时会停止部署并提示。</div>
+    <div class="hint">云端网页与电脑连接默认共用 TCP 1115 端口，被占用时自动选择空闲端口。部署会配置服务器系统防火墙，还需在云服务商安全组放行 TCP 80 和部署后显示的实际端口。</div>
     <div class="hint">电脑关机时，飞书消息仍由服务器上的 hub 独立处理；需要操作电脑的任务等 worker 开机后再执行。部署期间可关闭设置页，但请勿退出小A或关闭电脑；中断后会保留记录，请先检查云端状态。云端支持 Debian/Ubuntu + systemd，远程账号须为 root 或具有免密 sudo。</div>
   </div>
   </section>
