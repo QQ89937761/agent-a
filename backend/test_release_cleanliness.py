@@ -25,7 +25,7 @@ class CleanReleaseTests(unittest.TestCase):
         self.assertIn("PolyForm Noncommercial License 1.0.0", (root / "LICENSE").read_text(encoding="utf-8"))
         self.assertIn("禁止商业用途", (root / "LICENSE-COMMERCIAL.md").read_text(encoding="utf-8"))
         updater = (root / "backend/core/update_manager.py").read_text(encoding="utf-8")
-        self.assertIn('UPDATE_REPOSITORY = ""', updater)
+        self.assertIn('UPDATE_REPOSITORY = "QQ89937761/xiaoa-open-source"', updater)
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn('tags: ["v*"]', release)
         self.assertIn("frontend/dist/XiaoA.exe", release)
