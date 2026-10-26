@@ -333,6 +333,9 @@ class ProjectLibraryApiTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(self.server.CFG.role, "mode", "standalone"))
         self.enterContext(patch.object(self.server, "_channel_permission", return_value=(False, 1)))
         self.enterContext(patch.object(self.server, "_channel_send", new=AsyncMock()))
+        clock = Mock(wraps=self.server.time)
+        clock.monotonic.return_value = 100.0
+        self.enterContext(patch.object(self.server, "time", clock))
         row = self.manager.manage_library(ACCOUNTS, {"action": "save", "name": "工地", "call_name": "工地资料", "owner_account_id": "a", "context_ttl_minutes": 5})["library"]
         libraries.manage_context(self.manager.shared, row["id"], "user:alice", "save", content="项目计划工期为三个月")
         await self.server.handle_channel_command("weixin", "alice", "工地资料帮我分析一下工期", account_id="a")
@@ -340,13 +343,14 @@ class ProjectLibraryApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("帮我分析一下工期", self.turns[-1]["text"])
         key = ("weixin", "a", "alice")
         expires = self.server.CHANNEL_SHARED_CONTEXT[key]["expires_at"]
+        clock.monotonic.return_value = 101.0
         await self.server.handle_channel_command("weixin", "alice", "那需要多少人", account_id="a")
         self.assertEqual(expires, self.server.CHANNEL_SHARED_CONTEXT[key]["expires_at"])
         self.assertEqual(2, len(self.turns[-1]["history"]))
         before = len(self.turns)
         await self.server.handle_channel_command("weixin", "bob", "普通消息", account_id="b")
         self.assertEqual(before, len(self.turns))
-        self.server.CHANNEL_SHARED_CONTEXT[key]["expires_at"] = self.server.time.monotonic() - 1
+        clock.monotonic.return_value = expires + 1
         await self.server.handle_channel_command("weixin", "alice", "继续讨论", account_id="a")
         self.assertNotIn(key, self.server.CHANNEL_SHARED_CONTEXT)
         self.assertEqual(before, len(self.turns))
