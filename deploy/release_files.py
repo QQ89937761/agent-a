@@ -8,6 +8,7 @@ def release_data_files(root: Path) -> list[tuple[str, str]]:
     tracked = subprocess.check_output([
         "git", "-C", str(root), "ls-files", "-z", "--",
         "backend", "deploy", "frontend/src", "config.example.toml", "docs/密钥迁移.md",
+        "LICENSE", "LICENSE-COMMERCIAL.md", "THIRD-PARTY-NOTICES.md",
     ]).decode("utf-8").split("\0")
     data = []
     for name in filter(None, tracked):
