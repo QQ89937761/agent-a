@@ -1,4 +1,11 @@
 # Changelog
+
+## 1.0.40 - 2026-10-26
+
+- 接通改名后的 `QQ89937761/agent-a` GitHub Releases 更新通道，Windows 便携版由 GitHub Actions 构建发布。
+- 云端统一公网 HTTPS/WSS 入口固定使用 1115；端口被占用时明确停止部署。
+- 补充便携迁移、服务器维护、多微信/飞书共享记忆和云端办公说明。
+
 ## 1.0.39 - 2026-10-26
 
 - 首个公开源码版本：按 PolyForm Noncommercial License 1.0.0 发布，禁止商业使用。

@@ -31,6 +31,11 @@ jobs:
           $expected = "v" + ((Get-Content frontend/package.json -Raw | ConvertFrom-Json).version)
           $backend = (Get-Content backend/__init__.py -Raw | Select-String '__version__ = "([^"]+)"').Matches.Groups[1].Value
           if ($tag -ne $expected -or $expected -ne "v$backend") { throw "Tag, frontend and backend versions must match." }
+      - name: Select build interpreter
+        shell: pwsh
+        run: |
+          $python = (Get-Command python).Source
+          "XIAOA_BUILD_PYTHON=$python" >> $env:GITHUB_ENV
       - name: Install Python dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -r backend/requirements.txt -r backend/requirements-optional.txt -r backend/requirements-build.txt
@@ -46,4 +51,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release create "$env:GITHUB_REF_NAME" frontend/dist/XiaoA.exe release-assets/build-manifest.json --repo "$env:GITHUB_REPOSITORY" --generate-notes
+          gh release create "$env:GITHUB_REF_NAME" frontend/dist/XiaoA.exe release-assets/build-manifest.json LICENSE LICENSE-COMMERCIAL.md THIRD-PARTY-NOTICES.md --repo "$env:GITHUB_REPOSITORY" --verify-tag --generate-notes

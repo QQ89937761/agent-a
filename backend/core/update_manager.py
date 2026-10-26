@@ -14,7 +14,7 @@ from urllib.parse import quote, urlparse
 from pathlib import Path
 from typing import Any
 
-UPDATE_REPOSITORY = "QQ89937761/xiaoa-open-source"
+UPDATE_REPOSITORY = "QQ89937761/agent-a"
 _REDIRECT_HOSTS = frozenset({
     "api.github.com", "github.com", "release-assets.githubusercontent.com",
     "objects.githubusercontent.com", "github-releases.githubusercontent.com",

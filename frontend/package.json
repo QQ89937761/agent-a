@@ -1,6 +1,6 @@
 {
   "name": "desktop-agent-frontend",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "小A 桌面悬浮助手(Electron)",
   "main": "main.js",
   "author": "XiaoA",
@@ -53,6 +53,18 @@
       {
         "from": "../work/plugin-runtime",
         "to": "plugin-runtime"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "../LICENSE-COMMERCIAL.md",
+        "to": "LICENSE-COMMERCIAL.md"
+      },
+      {
+        "from": "../THIRD-PARTY-NOTICES.md",
+        "to": "THIRD-PARTY-NOTICES.md"
       }
     ],
     "win": {

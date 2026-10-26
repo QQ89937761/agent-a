@@ -68,22 +68,20 @@ def endpoint(host, port):
     return str(address), port
 
 
-def select_port(hub_port, previous=0):
-    candidates = [previous] if previous else range(8443, 65536)
-    for port in candidates:
-        if port == hub_port or not 1024 <= port <= 65535:
-            continue
-        with socket.socket() as sock:
-            try:
-                sock.bind(("0.0.0.0", port))
-            except OSError:
-                if previous:  # Our nginx listener is expected on repeat runs.
-                    text = HTTPS.read_text() if HTTPS.exists() else ""
-                    if f"listen {port} ssl;" in text:
-                        return port
-                continue
-            return port
-    raise RuntimeError("No free HTTPS port; existing service was left unchanged")
+def select_port(hub_port):
+    port = 1115
+    if hub_port == port:
+        raise RuntimeError("1115 is reserved for the public HTTPS endpoint; use another internal hub port")
+    with socket.socket() as sock:
+        try:
+            sock.bind(("0.0.0.0", port))
+        except OSError as exc:
+            # Repeat deployment may find our own nginx listener already running.
+            text = HTTPS.read_text() if HTTPS.exists() else ""
+            if f"listen {port} ssl;" in text and text.startswith("# Managed by XiaoA IP TLS."):
+                return port
+            raise RuntimeError("Public HTTPS port 1115 is occupied; existing service was left unchanged") from exc
+    return port
 
 
 def firewall(port):
@@ -232,7 +230,7 @@ def configure(host, hub_port, *, dry_run=False):
     previous = json.loads(STATE.read_text()) if STATE.exists() else {}
     if previous and previous.get("host") != host:
         raise RuntimeError("IP changed; migrate the existing IP certificate explicitly")
-    web_port = select_port(hub_port, previous.get("web_port", 0))
+    web_port = select_port(hub_port)
     # Refuse an existing IP virtual host owned by another application.
     current = run("nginx", "-T")
     foreign = current

@@ -52,15 +52,26 @@ class IPTLSTests(unittest.TestCase):
                     tls.nginx_config(config, "new config")
             self.assertEqual("old config", config.read_text())
 
-    def test_selected_port_skips_hub_and_occupied_socket(self):
-        with socket.socket() as occupied:
-            occupied.bind(("0.0.0.0", 0))
-            port = occupied.getsockname()[1]
-            with self.assertRaises(RuntimeError):
-                tls.select_port(port, previous=port)
-            with patch.object(tls, "HTTPS", Path("nonexistent-ip-nginx.conf")):
+    def test_public_port_is_fixed_and_conflicts_fail_without_fallback(self):
+        with self.assertRaisesRegex(RuntimeError, "reserved"):
+            tls.select_port(1115)
+        with patch.object(tls.socket, "socket") as socket_factory, \
+                patch.object(tls, "HTTPS", Path("nonexistent-ip-nginx.conf")):
+            sock = socket_factory.return_value.__enter__.return_value
+            self.assertEqual(1115, tls.select_port(8443))
+            sock.bind.assert_called_once_with(("0.0.0.0", 1115))
+            sock.bind.side_effect = OSError("occupied")
+            with self.assertRaisesRegex(RuntimeError, "1115 is occupied"):
+                tls.select_port(8443)
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "xiaoa.conf"
+            config.write_text(tls.tls_config("8.8.8.8", 8443, 1115))
+            with patch.object(tls, "HTTPS", config), patch.object(tls.socket, "socket") as factory:
+                factory.return_value.__enter__.return_value.bind.side_effect = OSError("occupied")
+                self.assertEqual(1115, tls.select_port(8443))
+                config.write_text(tls.tls_config("8.8.8.8", 8443, 8444))
                 with self.assertRaises(RuntimeError):
-                    tls.select_port(8443 if port != 8443 else 8444, previous=port)
+                    tls.select_port(8443)
 
     def test_credentials_share_browser_port_with_ca_validated_worker(self):
         connection = make_connection_string("8.8.8.8", 8444, "", "t" * 32)
