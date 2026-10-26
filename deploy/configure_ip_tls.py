@@ -64,8 +64,8 @@ def endpoint(host, port):
     if not address.is_global:
         raise ValueError("IP must be a globally routable IPv4/IPv6 address")
     port = int(port)
-    if not 1024 <= port <= 65535:
-        raise ValueError("Hub port must be between 1024 and 65535")
+    if not 1 <= port <= 65535 or port in (80, 443):
+        raise ValueError("Hub port must be between 1 and 65535, excluding 80 and 443")
     return str(address), port
 
 

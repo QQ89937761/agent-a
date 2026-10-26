@@ -114,7 +114,7 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(all(args[0] == str(tx.ROOT / '.venv/bin/python') for args in updates))
 
     def test_connection_recovery_removes_stale_temporary_credentials(self):
-        tx.ENV.write_text('AGENT_PUBLIC_HOST=203.0.113.10\nAGENT_SERVER_PORT=8443\n'
+        tx.ENV.write_text('AGENT_PUBLIC_HOST=203.0.113.10\nAGENT_SERVER_PORT=1004\n'
                           'AGENT_HUB_TOKEN=0123456789abcdef0123456789abcdef\nAGENT_WEB_PASSWORD=test-web-password\n', encoding='utf-8')
         (tx.ROOT / 'data/hub-tls/hub.crt').write_text('certificate', encoding='utf-8')
         temporary = tx.ROOT / 'data/connection-string.txt'
@@ -157,7 +157,7 @@ class TransactionTests(unittest.TestCase):
     def test_uninstall_removes_owned_gateway_files(self):
         import json
         tx.ROOT.joinpath('data/public-tls.json').parent.mkdir(exist_ok=True)
-        tx.ROOT.joinpath('data/public-tls.json').write_text(json.dumps({'web_port': 8444}), encoding='utf-8')
+        tx.ROOT.joinpath('data/public-tls.json').write_text(json.dumps({'web_port': 1115}), encoding='utf-8')
         signatures = {
             'xiaoa-ip-http.conf': '# Managed by XiaoA IP TLS.',
             'xiaoa-ip-https.conf': '# Managed by XiaoA IP TLS.',
@@ -174,15 +174,15 @@ class TransactionTests(unittest.TestCase):
     def test_ca_credentials_recover_unified_port_without_leaf_fingerprint(self):
         import json
         from backend.core.connection_string import parse_connection_string
-        tx.ENV.write_text('AGENT_PUBLIC_HOST=8.8.8.8\nAGENT_SERVER_PORT=8443\n'
+        tx.ENV.write_text('AGENT_PUBLIC_HOST=8.8.8.8\nAGENT_SERVER_PORT=1004\n'
                           'AGENT_HUB_TOKEN=0123456789abcdef0123456789abcdef\nAGENT_WEB_PASSWORD=test-web-password\n')
         (tx.ROOT / 'data/public-tls.json').write_text(json.dumps(
-            {'host': '8.8.8.8', 'web_port': 8444, 'tls_mode': 'ca'}))
+            {'host': '8.8.8.8', 'web_port': 1115, 'tls_mode': 'ca'}))
         result = tx.credentials()
         details = parse_connection_string(result['connection_string'])
         self.assertEqual('', details.fingerprint)
-        self.assertEqual(8444, details.port)
-        self.assertEqual('https://8.8.8.8:8444', result['web_url'])
+        self.assertEqual(1115, details.port)
+        self.assertEqual('https://8.8.8.8:1115', result['web_url'])
 
     def test_health_failure_rolls_back_before_commit(self):
         with patch.object(tx, 'health', side_effect=[{'healthy': True}, {'healthy': False}]), \

@@ -17,19 +17,19 @@ class ConnectionStringTests(unittest.TestCase):
         self.token = "token-" + "x" * 31
 
     def test_round_trip_and_masked_preview(self):
-        value = make_connection_string("203.0.113.10", 8443, self.fp, self.token)
+        value = make_connection_string("203.0.113.10", 1115, self.fp, self.token)
         parsed = parse_connection_string(value)
-        self.assertEqual("wss://203.0.113.10:8443/worker", parsed.hub_url)
+        self.assertEqual("wss://203.0.113.10:1115/worker", parsed.hub_url)
         preview = masked_preview(parsed)
         self.assertEqual("203.0.113.10", preview["host"])
         self.assertNotIn(self.token, str(preview))
 
     def test_new_connection_uses_ca_validation_without_leaf_pin(self):
-        value = make_connection_string("8.8.8.8", 8444, "", self.token)
+        value = make_connection_string("8.8.8.8", 1115, "", self.token)
         self.assertTrue(value.startswith("XIAOA2."))
         details = parse_connection_string(value)
         self.assertEqual("", details.fingerprint)
-        self.assertEqual("wss://8.8.8.8:8444/worker", details.hub_url)
+        self.assertEqual("wss://8.8.8.8:1115/worker", details.hub_url)
         context = hub_ssl_context(details.fingerprint)
         self.assertEqual(ssl.CERT_REQUIRED, context.verify_mode)
         self.assertTrue(context.check_hostname)
@@ -37,16 +37,16 @@ class ConnectionStringTests(unittest.TestCase):
         self.assertEqual(ssl.CERT_NONE, hub_ssl_context(self.fp).verify_mode)
 
     def test_one_character_change_is_rejected(self):
-        value = make_connection_string("hub.example.com", 8443, self.fp, self.token)
+        value = make_connection_string("hub.example.com", 1115, self.fp, self.token)
         changed = value[:-1] + ("0" if value[-1] != "0" else "1")
         with self.assertRaisesRegex(ValueError, "校验失败"):
             parse_connection_string(changed)
 
     def test_bad_fingerprint_and_token_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "指纹"):
-            make_connection_string("1.2.3.4", 8443, "bad", self.token)
+            make_connection_string("1.2.3.4", 1115, "bad", self.token)
         with self.assertRaisesRegex(ValueError, "口令"):
-            make_connection_string("1.2.3.4", 8443, self.fp, "short")
+            make_connection_string("1.2.3.4", 1115, self.fp, "short")
 
     def test_fingerprint_mismatch_is_rejected(self):
         certificate = b"peer-certificate"

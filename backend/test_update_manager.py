@@ -101,7 +101,7 @@ class ReleaseManifestTests(unittest.TestCase):
                                           "https://release-assets.githubusercontent.com/file.exe")
         self.assertIsNotNone(allowed)
         for url in ("http://github.com/file", "https://example.com/file",
-                    "https://user@github.com/file", "https://github.com:8443/file"):
+                    "https://user@github.com/file", "https://github.com:1115/file"):
             with self.subTest(url=url), self.assertRaises(update_manager.ReleaseError):
                 opener.redirect_request(request, io.BytesIO(), 302, "Found", {}, url)
 

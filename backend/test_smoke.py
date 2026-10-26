@@ -150,20 +150,20 @@ class DeploymentScriptTests(unittest.TestCase):
         if not bash:
             self.assertIn("端口 $PORT:", script.read_text(encoding="utf-8"))
             return
-        result = subprocess.run([bash, str(script), "18443"], capture_output=True, text=True)
-        self.assertIn("端口 18443:", result.stdout)
+        result = subprocess.run([bash, str(script), "21115"], capture_output=True, text=True)
+        self.assertIn("端口 21115:", result.stdout)
 
     def test_postcheck_runs_service_checks_without_private_host_baseline(self):
         root = Path(__file__).resolve().parents[1]
         script = self._script(root, "postcheck.sh").read_text(encoding="utf-8")
-        self.assertIn('diagnose_8443.sh', script)
+        self.assertIn('diagnose_endpoint.sh', script)
         self.assertIn('"https://127.0.0.1:$PORT/health"', script)
         self.assertNotIn("ZHXA", script)
         self.assertNotIn("BASELINE_DIR", script)
 
     def test_firewall_diagnosis_has_three_independent_layers(self):
         root = Path(__file__).resolve().parents[1]
-        script = self._script(root, "diagnose_8443.sh").read_text(encoding="utf-8")
+        script = self._script(root, "diagnose_endpoint.sh").read_text(encoding="utf-8")
         for marker in ("服务层:", "监听层:", "防火墙层:", "云厂商安全组"):
             self.assertIn(marker, script)
         self.assertIn("0.0.0.0", script)

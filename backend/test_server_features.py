@@ -979,17 +979,17 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         cfg = Config()
         cfg.role.mode = "worker"
         cfg.role.hub_token = "machine-secret"
-        cfg.role.hub_url = "wss://203.0.113.10:8444/worker"
+        cfg.role.hub_url = "wss://203.0.113.10:1115/worker"
         with tempfile.TemporaryDirectory() as temp, patch.object(server, "CFG", cfg), \
              patch.object(server, "app_home", return_value=Path(temp)):
-            self.assertEqual("https://203.0.113.10:8444", server._cloud_web_url())
+            self.assertEqual("https://203.0.113.10:1115", server._cloud_web_url())
             server._validate_worker_connection("worker", cfg.role.hub_url, cfg.role.hub_token, "test")
             cfg.role.mode = "hub"
-            cfg.server.port = 8443
+            cfg.server.port = 1004
             (Path(temp) / "data").mkdir()
-            (Path(temp) / "data/public-tls.json").write_text(json.dumps({"host": "203.0.113.10", "web_port": 8444}))
+            (Path(temp) / "data/public-tls.json").write_text(json.dumps({"host": "203.0.113.10", "web_port": 1115}))
             with patch.dict(os.environ, {"AGENT_PUBLIC_HOST": "203.0.113.10"}):
-                self.assertEqual("https://203.0.113.10:8444", server._cloud_web_url())
+                self.assertEqual("https://203.0.113.10:1115", server._cloud_web_url())
 
     async def test_cloud_feishu_update_is_separate_from_deployment(self):
         local = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
@@ -1158,7 +1158,7 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_connection_string_settings_parse_and_save(self):
         fingerprint = "a" * 64
         token = "token-" + "x" * 31
-        value = make_connection_string("203.0.113.10", 8443, fingerprint, token)
+        value = make_connection_string("203.0.113.10", 1115, fingerprint, token)
         cfg = Config()
         with tempfile.TemporaryDirectory(prefix="xiaoa-connection-settings-") as tmp, \
              patch.dict(os.environ, {"AGENT_HUB_TOKEN": ""}, clear=False), \
@@ -1176,7 +1176,7 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["restart_required"])
         self.assertEqual("worker", cfg.role.mode)
-        self.assertEqual("wss://203.0.113.10:8443/worker", cfg.role.hub_url)
+        self.assertEqual("wss://203.0.113.10:1115/worker", cfg.role.hub_url)
         self.assertEqual(fingerprint, cfg.role.tls_fingerprint)
         self.assertEqual(token, persisted.role.hub_token)
 

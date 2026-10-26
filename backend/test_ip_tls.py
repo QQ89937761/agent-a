@@ -13,9 +13,9 @@ from backend.core.connection_string import make_connection_string, parse_connect
 
 class IPTLSTests(unittest.TestCase):
     def test_public_address_and_ports_are_validated(self):
-        self.assertEqual(("8.8.8.8", 8443), tls.endpoint("8.8.8.8", 8443))
-        for host, port in (("127.0.0.1", 8443), ("192.168.1.2", 8443),
-                           ("example.com", 8443), ("8.8.8.8", 80), ("8.8.8.8", 65536)):
+        self.assertEqual(("8.8.8.8", 1004), tls.endpoint("8.8.8.8", 1004))
+        for host, port in (("127.0.0.1", 1115), ("192.168.1.2", 1115),
+                           ("example.com", 1115), ("8.8.8.8", 0), ("8.8.8.8", 80), ("8.8.8.8", 443), ("8.8.8.8", 65536)):
             with self.subTest(host=host, port=port), self.assertRaises(ValueError):
                 tls.endpoint(host, port)
 
@@ -56,11 +56,11 @@ class IPTLSTests(unittest.TestCase):
         with patch.object(tls.socket, "socket") as factory, \
                 patch.object(tls, "HTTPS", Path("nonexistent-ip-nginx.conf")):
             sock = factory.return_value.__enter__.return_value
-            self.assertEqual(1115, tls.select_port(8443))
+            self.assertEqual(1115, tls.select_port(1004))
             sock.bind.assert_called_once_with(("0.0.0.0", 1115))
             sock.bind.reset_mock()
             sock.bind.side_effect = [OSError("occupied"), None]
-            self.assertEqual(1116, tls.select_port(8443))
+            self.assertEqual(1116, tls.select_port(1004))
             self.assertEqual([(("0.0.0.0", 1115),), (("0.0.0.0", 1116),)],
                              [call.args for call in sock.bind.call_args_list])
             sock.bind.side_effect = None
@@ -71,27 +71,27 @@ class IPTLSTests(unittest.TestCase):
     def test_repeat_deployment_reuses_selected_port_only_for_managed_nginx(self):
         with tempfile.TemporaryDirectory() as temp:
             config = Path(temp) / "xiaoa.conf"
-            config.write_text(tls.tls_config("8.8.8.8", 8443, 1116))
+            config.write_text(tls.tls_config("8.8.8.8", 1004, 1116))
             with patch.object(tls, "HTTPS", config), patch.object(tls.socket, "socket") as factory:
                 sock = factory.return_value.__enter__.return_value
                 sock.bind.side_effect = OSError("occupied")
-                self.assertEqual(1116, tls.select_port(8443, 1116))
+                self.assertEqual(1116, tls.select_port(1004, 1116))
                 sock.bind.assert_called_once_with(("0.0.0.0", 1116))
                 config.write_text("# Another application\nlisten 1116 ssl;")
                 sock.bind.side_effect = [OSError("occupied"), None]
-                self.assertEqual(1115, tls.select_port(8443, 1116))
+                self.assertEqual(1115, tls.select_port(1004, 1116))
 
     def test_credentials_share_browser_port_with_ca_validated_worker(self):
-        connection = make_connection_string("8.8.8.8", 8444, "", "t" * 32)
+        connection = make_connection_string("8.8.8.8", 1115, "", "t" * 32)
         raw = f"XIAOA_CONNECTION_STRING={connection}\nAGENT_WEB_PASSWORD={'w' * 32}\n"
-        value = cloud_deploy._parse_credentials(raw + "XIAOA_PUBLIC_WEB_URL=https://8.8.8.8:8444")
-        self.assertEqual(8444, parse_connection_string(value["connection_string"]).port)
+        value = cloud_deploy._parse_credentials(raw + "XIAOA_PUBLIC_WEB_URL=https://8.8.8.8:1115")
+        self.assertEqual(1115, parse_connection_string(value["connection_string"]).port)
         with tempfile.TemporaryDirectory() as temp:
             cloud_deploy._save_local_credentials(temp, value, "8.8.8.8", "root")
             saved = json.loads((Path(temp) / "data/cloud-ssh/target.json").read_text())
-        self.assertEqual("https://8.8.8.8:8444", saved["web_url"])
-        for url in ("https://other.example:8444", "http://8.8.8.8:8444", "https://8.8.8.8:8445",
-                    "https://user:pass@8.8.8.8:8444", "https://8.8.8.8:8444/path"):
+        self.assertEqual("https://8.8.8.8:1115", saved["web_url"])
+        for url in ("https://other.example:1115", "http://8.8.8.8:1115", "https://8.8.8.8:1116",
+                    "https://user:pass@8.8.8.8:1115", "https://8.8.8.8:1115/path"):
             with self.subTest(url=url), self.assertRaises(Exception):
                 cloud_deploy._parse_credentials(raw + "XIAOA_PUBLIC_WEB_URL=" + url)
 

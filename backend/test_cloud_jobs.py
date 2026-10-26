@@ -92,8 +92,8 @@ class DeploymentApiTests(unittest.IsolatedAsyncioTestCase):
              patch.object(server, '_CLOUD_DEPLOY_JOBS', {}), patch.object(cloud_deploy, 'maintain', return_value={'healthy': True, 'version': '0.9.6'}), \
              patch.object(cloud_deploy, 'deploy') as deploy, patch.object(server, '_cloud_connect_worker', new=AsyncMock()) as connect, \
              patch.object(cloud_deploy, 'recover_connection', return_value={
-                 'connection_string': make_connection_string('203.0.113.10', 8443, 'f' * 64, 't' * 32),
-                 'connection': {'host': '203.0.113.10', 'port': 8443}}), \
+                 'connection_string': make_connection_string('203.0.113.10', 1115, 'f' * 64, 't' * 32),
+                 'connection': {'host': '203.0.113.10', 'port': 1115}}), \
              patch.object(server, 'CFG', Config()), patch.object(server, '_rewrite_config'):
             target = Path(temp) / 'data/cloud-ssh/target.json'
             target.parent.mkdir(parents=True)
@@ -109,10 +109,10 @@ class DeploymentApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_deploy_and_repair_never_download_cloud_release(self):
         from backend.core import update_manager
 
-        connection_string = make_connection_string('203.0.113.10', 8443, 'f' * 64, 't' * 32)
+        connection_string = make_connection_string('203.0.113.10', 1115, 'f' * 64, 't' * 32)
         deploy_result = {
             'connection_string': connection_string,
-            'connection': {'host': '203.0.113.10', 'port': 8443},
+            'connection': {'host': '203.0.113.10', 'port': 1115},
             'remote_status': {'healthy': True, 'version': '0.9.6'},
         }
         with tempfile.TemporaryDirectory() as temp, \

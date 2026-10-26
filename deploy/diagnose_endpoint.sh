@@ -3,10 +3,10 @@
 set -u
 
 if [ "$(uname -s 2>/dev/null || true)" != "Linux" ]; then
-  echo "[ERROR] diagnose_8443.sh 只支持 Linux。" >&2
+  echo "[ERROR] diagnose_endpoint.sh 只支持 Linux。" >&2
   exit 2
 fi
-PORT="${1:-8443}"
+PORT="${1:-1115}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "[ERROR] 端口必须是 1-65535 的数字。" >&2
   exit 2

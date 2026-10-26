@@ -94,7 +94,7 @@ if [ "${1:-}" = "rotate-token" ]; then
   replace_env AGENT_HUB_TOKEN "$TOKEN"
   systemctl restart xiaoa-hub
   print_connection "${AGENT_PUBLIC_HOST:?环境文件缺少 AGENT_PUBLIC_HOST}" \
-    "${AGENT_SERVER_PORT:-8443}" "$TOKEN"
+    "${AGENT_SERVER_PORT:-1004}" "$TOKEN"
   echo "旧连接串已经失效；新凭据已写入 $CREDENTIAL_FILE。"
   exit 0
 fi
@@ -191,19 +191,19 @@ if [[ ! "$PUBLIC_IP" =~ ^[0-9a-fA-F:.]+$ ]] || [ -z "$PUBLIC_IP" ]; then
   exit 2
 fi
 if [ -z "$PORT" ]; then
-  PORT=8443
+  PORT=1004
   while [ "$PORT" -le 65535 ] && port_in_use "$PORT"; do PORT=$((PORT + 1)); done
   if [ "$PORT" -gt 65535 ]; then
-    echo "[ERROR] 从 8443 到 65535 没有可用端口。" >&2
+    echo "[ERROR] 从 1004 到 65535 没有可用端口。" >&2
     exit 2
   fi
-  echo "已选用端口 $PORT，请在安全组放行 TCP $PORT。"
+  echo "内部 hub 已选用回环端口 $PORT，无需在安全组开放。"
 fi
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "[ERROR] 端口必须在 1 到 65535 之间"; exit 2
 fi
 if [ "$PORT" = 80 ] || [ "$PORT" = 443 ]; then
-  echo "[ERROR] 免域名路线不使用 80/443，请保留给服务器现有服务。建议 8443。"; exit 2
+  echo "[ERROR] 免域名路线不使用 80/443，请保留给服务器现有服务。建议 1004。"; exit 2
 fi
 
 
@@ -314,7 +314,7 @@ fi
 echo "XIAOA_STEP public-tls"
 python3 "$APP_DIR/deploy/configure_ip_tls.py" "$PUBLIC_IP" "$PORT"
 
-echo "==> hub 已启动在 $PUBLIC_IP:$PORT"
+echo "==> hub 已配置在 127.0.0.1:$PORT"
 echo "    安全组需放行 TCP 80（证书验证）及上面统一的 HTTPS/WSS 端口；后端仅监听本机。"
 print_connection "$PUBLIC_IP" "$PORT" "$TOKEN"
 echo "查看状态: systemctl status xiaoa-hub"

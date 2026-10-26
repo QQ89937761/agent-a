@@ -243,7 +243,7 @@ class CloudDeployTests(unittest.TestCase):
 
     def test_deploy_uses_key_after_enrollment_and_deletes_remote_credentials(self):
         fingerprint = hashlib.sha256(b"cert").hexdigest()
-        connection = make_connection_string("203.0.113.10", 8443, fingerprint, "x" * 32)
+        connection = make_connection_string("203.0.113.10", 1115, fingerprint, "x" * 32)
         fake = MagicMock()
         fake.__enter__.return_value = fake
 
@@ -309,7 +309,7 @@ class CloudDeployTests(unittest.TestCase):
         self.assertTrue(any('rm -f /tmp/xiaoa-' in call.args[0] for call in fake.run.call_args_list))
 
     def test_byte_callback_and_commit_are_structured_and_credentials_never_become_progress(self):
-        connection = make_connection_string("203.0.113.10", 8443, "f" * 64, "t" * 32)
+        connection = make_connection_string("203.0.113.10", 1115, "f" * 64, "t" * 32)
         fake = MagicMock()
         fake.__enter__.return_value = fake
         fake.run.side_effect = lambda command, **kwargs: "0" if command == "id -u" else (f"XIAOA_CONNECTION_STRING={connection}\nAGENT_WEB_PASSWORD={'w' * 32}\n" if "cat /opt/xiaoa/data/connection-string.txt" in command else "")
@@ -321,7 +321,7 @@ class CloudDeployTests(unittest.TestCase):
             callback('XIAOA_PROGRESS {"stage":"health","message":"healthy","cloud_re')
             callback('ady":true}\nsecret arbitrary output\n')
             return 'secret arbitrary output\nXIAOA_RESULT ' + json.dumps({
-                'healthy': True, 'version': '0.9.6', 'port': 8443,
+                'healthy': True, 'version': '0.9.6', 'port': 1115,
                 'private': 'must not be retained',
             }) + '\n'
         fake.run_stream.side_effect = stream
@@ -339,15 +339,15 @@ class CloudDeployTests(unittest.TestCase):
         self.assertTrue(any(event.get("cloud_ready") for event in events))
         self.assertNotIn("secret arbitrary output", json.dumps(events))
         self.assertNotIn(connection, json.dumps(events))
-        self.assertEqual({"healthy": True, "port": 8443, "version": "0.9.6"}, result["remote_status"])
+        self.assertEqual({"healthy": True, "port": 1115, "version": "0.9.6"}, result["remote_status"])
 
     def test_remote_result_parser_ignores_untrusted_fields_and_malformed_output(self):
         output = 'noise\nXIAOA_RESULT ' + json.dumps({
-            'healthy': True, 'version': 'v' * 100, 'port': 8443,
+            'healthy': True, 'version': 'v' * 100, 'port': 1115,
             'secret': 'not retained', 'data_preserved': False,
         })
         self.assertEqual({
-            'healthy': True, 'version': 'v' * 80, 'port': 8443, 'data_preserved': False,
+            'healthy': True, 'version': 'v' * 80, 'port': 1115, 'data_preserved': False,
         }, cloud_deploy._parse_remote_result(output))
         for invalid in (None, '', 'noise', 'XIAOA_RESULT {bad', 'XIAOA_RESULT []'):
             with self.subTest(output=invalid):
@@ -355,7 +355,7 @@ class CloudDeployTests(unittest.TestCase):
 
     def test_maintenance_is_read_only_to_ssh_keys_and_secret_recovery_does_not_deploy(self):
         fake = MagicMock()
-        connection = make_connection_string("203.0.113.10", 8443, "f" * 64, "t" * 32)
+        connection = make_connection_string("203.0.113.10", 1115, "f" * 64, "t" * 32)
         fake.run.side_effect = lambda command, **kwargs: "0" if command == "id -u" else (json.dumps({"connection_string": connection, "web_password": "w" * 32}) if " credentials" in command else "")
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -379,14 +379,14 @@ class CloudDeployTests(unittest.TestCase):
             cloud_deploy._parse_credentials("AGENT_WEB_PASSWORD=long-enough-password")
 
     def test_credential_parser_accepts_legacy_nonempty_web_password(self):
-        connection = make_connection_string("203.0.113.10", 8443, "f" * 64, "t" * 32)
+        connection = make_connection_string("203.0.113.10", 1115, "f" * 64, "t" * 32)
         result = cloud_deploy._parse_credentials(
             f"XIAOA_CONNECTION_STRING={connection}\nAGENT_WEB_PASSWORD=oldpass1234\n"
         )
         self.assertEqual("oldpass1234", result["web_password"])
 
     def test_credential_parser_rejects_missing_web_password(self):
-        connection = make_connection_string("203.0.113.10", 8443, "f" * 64, "t" * 32)
+        connection = make_connection_string("203.0.113.10", 1115, "f" * 64, "t" * 32)
         with self.assertRaisesRegex(Exception, "网页登录密码"):
             cloud_deploy._parse_credentials(f"XIAOA_CONNECTION_STRING={connection}\n")
 

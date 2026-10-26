@@ -61,7 +61,7 @@ class MemoryTests(unittest.TestCase):
                 "记住服务器密码在设置里",
                 "云服务器地址 203.0.113.10 用户名 root 密码 xxx",
                 "帮我登录云端看看 ZHXA 还活着吗",
-                "8443 端口放行了",
+                "1115 端口放行了",
             ]
             for text in turns:
                 self.assertTrue(memory._worth_extracting([{"role": "user", "content": text}]))

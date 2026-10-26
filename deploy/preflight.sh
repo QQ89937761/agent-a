@@ -7,7 +7,7 @@ if [ "$(uname -s 2>/dev/null || true)" != "Linux" ]; then
   exit 2
 fi
 
-PORT="${1:-8443}"
+PORT="${1:-1115}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "[ERROR] 端口必须是 1-65535 的数字。" >&2
   exit 2

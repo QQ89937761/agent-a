@@ -297,7 +297,7 @@ def health():
             values[name] = tokens[0] if tokens else ''
     active = run(['systemctl', 'is-active', '--quiet', 'xiaoa-hub'], check=False).returncode == 0
     result = {'installed': (ROOT / 'backend').is_dir(), 'active': active, 'healthy': False,
-              'port': int(values.get('AGENT_SERVER_PORT', '8443')), 'transaction_pending': BACKUP.exists()}
+              'port': int(values.get('AGENT_SERVER_PORT', '1004')), 'transaction_pending': BACKUP.exists()}
     if active:
         try:
             # Localhost probe only, pinned to the installed self-signed certificate.

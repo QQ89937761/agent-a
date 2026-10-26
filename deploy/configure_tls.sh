@@ -4,7 +4,7 @@ set -euo pipefail
 
 DOMAIN="${1:-}"
 EMAIL="${2:-}"
-UPSTREAM_PORT="${3:-8443}"
+UPSTREAM_PORT="${3:-1004}"
 if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || [[ "$DOMAIN" != *.* ]]; then
   echo "用法: sudo bash deploy/configure_tls.sh xiaoa.example.com you@example.com [hub端口]"
   exit 1
