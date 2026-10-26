@@ -1,0 +1,36 @@
+.venv/
+da-venv/
+node_modules/
+dist/
+work/
+build/
+__pycache__/
+.playwright-cli/
+.pytest_cache/
+model-cache/
+output/
+*.pyc
+*.log
+*.exe
+data/
+config.toml
+ui_token.txt
+*.pem
+*.key
+*-key.txt
+# 放在根目录的凭据/接口速查文件(手工放进来的,别提交)
+*密钥*
+*秘钥*
+*凭据*
+*secret*
+*credential*
+Grok2API*.md
+ZHXA*.txt
+release-assets/
+
+# Per-user runtime data and secrets
+XiaoA-data/
+.env
+.env.*
+*.p12
+*.pfx

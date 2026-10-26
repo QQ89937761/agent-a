@@ -1,0 +1,13 @@
+# 云端 hub 的可复现运行依赖（不含 Windows 桌面自动化）。
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+paramiko==5.0.0
+qrcode[pil]>=8.0,<9.0
+cryptography>=43,<46
+websockets>=12.0,<16.0
+tomli==2.2.1; python_version < "3.11"
+lark-oapi==1.7.2
+python-docx==1.2.0
+openpyxl==3.1.5
+fastembed==0.5.1

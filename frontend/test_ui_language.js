@@ -1,0 +1,282 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const {translate, translateCloudLog, normalize, EN, toolDescription} = require("./src/ui-language");
+assert.equal(normalize("en"), "en");
+for (const value of [null, undefined, "", "bad", "zh", "<img>"]) assert.equal(normalize(value), "zh");
+assert.equal(translate("设置", "en"), "Settings");
+assert.equal(translate("设置", "zh"), "设置");
+assert.equal(translate(" \n给小A发送消息  ", "en"), " \nMessage XiaoA  ");
+assert.equal(translate("模型可用 · 32ms", "en"), "Model available · 32ms");
+assert.equal(translate("上游返回 12 个模型，点击下拉框即可填入", "en"), "12 models found; choose one from the list");
+for (const value of ["自定义厂商", "gpt-4o", "D:\\项目\\报告.docx", "https://host/api", "__proto__", "constructor"]) assert.equal(translate(value, "en"), value);
+assert(Object.keys(EN).length > 300);
+// Exercise real persistence and toggle code without adding a DOM dependency.
+function runtime(saved, blocked = false, content = null) {
+  const nativeLanguages = [];
+  const events = {}, buttonEvents = {}, storage = new Map([["xiaoa.uiLanguage", saved]]), frameMessages = [], languageEvents = [];
+  const button = {textContent: "中", setAttribute(name, value) { this[name] = value; }, addEventListener(name, handler) { buttonEvents[name] = handler; }};
+  const root = {nodeType: 1, childNodes: [], dataset: {}, matches: () => false, closest: () => null, hasAttribute: () => false};
+  const document = {documentElement: root, head: root, body: content || root, getElementById: id => id === "languageToggle" ? button : null,
+    querySelectorAll: () => [{contentWindow: {postMessage: data => frameMessages.push(data)}, addEventListener() {}}]};
+  const window = {bridge:{setUiLanguage: value => nativeLanguages.push(value)},
+    addEventListener: (name, fn) => { events[name] = fn; }, dispatchEvent: event => languageEvents.push(event)}; window.parent = window;
+  let onMutation;
+  const context = vm.createContext({window, document, CustomEvent: function (type, init) { this.type = type; this.detail = init.detail; }, MutationObserver: function (callback) { onMutation = callback; return {observe() {}, disconnect() {}}; },
+    location: {origin: "https://xiaoa.test"}, localStorage: {
+      getItem: key => { if (blocked) throw Error("blocked"); return storage.get(key); },
+      setItem: (key, value) => { if (blocked) throw Error("blocked"); storage.set(key, value); },
+    }});
+  vm.runInContext(fs.readFileSync("src/ui-language.js", "utf8"), context);
+  return {nativeLanguages, mutate: records => onMutation(records), window, document, events, button, click: buttonEvents.click, storage, frameMessages, languageEvents};
+}
+{
+  const app = runtime(null);
+  assert.equal(app.button.textContent, "中");
+  assert.equal(app.nativeLanguages.at(-1), "zh");
+  assert.equal(app.document.documentElement.lang, "zh-CN");
+  app.click();
+  assert.equal(app.button.textContent, "EN");
+  assert.equal(app.button["aria-pressed"], "true");
+  assert.equal(app.nativeLanguages.at(-1), "en");
+  assert.equal(app.document.documentElement.lang, "en");
+  assert.equal(app.storage.get("xiaoa.uiLanguage"), "en");
+  assert.equal(app.frameMessages.at(-1).language, "en");
+  assert.equal(app.languageEvents.at(-1).type, "xiaoa-ui-language-changed");
+  assert.equal(app.languageEvents.at(-1).detail.language, "en");
+  assert.equal(runtime(app.storage.get("xiaoa.uiLanguage")).button.textContent, "EN");
+  app.click(); assert.equal(app.button.textContent, "中");
+  app.storage.set("xiaoa.uiLanguage", "en"); app.events.storage({key: "xiaoa.uiLanguage"});
+  assert.equal(app.button.textContent, "EN");
+  app.events.message({source: {}, origin: "https://evil.test", data: {type: "xiaoa-ui-language", language: "zh"}});
+  assert.equal(runtime("en").nativeLanguages.at(-1), "en", "startup restores the native menu language");
+  assert.equal(app.button.textContent, "EN", "foreign messages must not change language");
+}
+{
+  const app = runtime("en", true); app.click();
+  assert.equal(app.button.textContent, "EN", "blocked storage still permits session-only switching");
+}
+const html = fs.readFileSync("src/index.html", "utf8");
+assert(html.indexOf('id="languageToggle"') < html.indexOf('id="themeToggle"'));
+assert(/:is\(#themeToggle, #languageToggle\)\s*\{[^}]*border-radius:\s*50%/.test(html));
+assert(/:is\(#themeToggle, #languageToggle\)\s*\{[^}]*width:\s*32px; height:\s*32px/.test(html));
+for (const page of ["index", "settings", "login", "voices", "float", "foreground_notice"]) assert(fs.readFileSync(`src/${page}.html`, "utf8").includes('<script src="./ui-language.js"></script>'));
+assert(JSON.parse(fs.readFileSync("package.json", "utf8")).build.files.includes("src/ui-language.js"));
+console.log("UI language: real toggle, persistence, blocked storage, frame synchronization, safe text and shared geometry passed");
+
+for (const [source, expected] of [
+  ["已启用 147 个内置工具，按工作类型分类显示。", "147 built-in tools enabled, grouped by work type."],
+  ["电脑与窗口 · 18", "Computer & Windows · 18"],
+  ["共 12 条，当前显示最近 5 条。", "12 records in total; showing the latest 5."],
+  ["本地电脑（未配置云端连接）", "Local computer (no cloud connection configured)"],
+  ["远程操控：关闭（仅聊天）", "Remote control: Off (chat only)"],
+  ["已连接 · 管理员", "Connected · Administrator"],
+  ["本库 3 条资料，项目对话保持 30 分钟。示例：我的中文项目，帮我看看这个项目的工期。", "3 entries; project session lasts 30 minutes. Example: 我的中文项目, help me check this project's schedule."],
+  ["当前由环境变量 XIAOA_KEY 接管，此处填写不生效。", "Managed by environment variable XIAOA_KEY; edits here have no effect."],
+  ["测试失败：保留原始诊断", "Test failed: 保留原始诊断"],
+]) {
+  assert.equal(translate(source, "en"), expected);
+  assert.equal(translate(source, "zh"), source);
+}
+assert.equal(translate("云端记忆同步：今天尝试 2 次，成功 1 次；最近成功：尚无成功记录；有 1 次未完成；最近错误：保留诊断", "en"),
+  "Cloud memory sync: 2 attempts today, 1 successful; last success: No successful sync yet; 1 pending; last error: 保留诊断");
+assert.equal(translate("合成:腾讯云 未配置 ✗　识别:腾讯云 已启用 ✓", "en"), "Speech: Tencent Cloud Not configured ✗ · Recognition: Tencent Cloud Enabled ✓");
+const releaseLines = ["新增并完善 CAD 二维绘图、编辑、9类尺寸标注、标注样式管理、常用三维实体、布尔运算和导出工具。", "CAD 功能需本机安装支持 COM 的 AutoCAD；保留完整 XiaoA-data。"];
+assert.equal(translate(releaseLines.join("\n"), "en"), releaseLines.map(line => EN[line]).join("\n"));
+assert.equal(translate("未来版本未翻译的发布说明", "en"), "未来版本未翻译的发布说明");
+assert.match(toolDescription({name:"screen_capture"}), /^Capture the desktop/);
+assert.match(toolDescription({name:"cad_erase_entities",danger:true}), /High-risk.*approval/);
+assert.match(toolDescription({name:"excel_write_cells",side_effect:true}), /Changes system state/);
+assert.equal(toolDescription({name:"custom_user_tool"}), "");
+// Minimal DOM: exercise real observer/persistence without adding a dependency.
+function element(tag = "DIV", attrs = {}, parent = null) {
+  const attributes = new Map(Object.entries(attrs));
+  const node = {nodeType:1, tagName:tag, childNodes:[], parentElement:parent, value:"",
+    hasAttribute: key => attributes.has(key), getAttribute: key => attributes.get(key) ?? null,
+    setAttribute: (key, value) => attributes.set(key, value),
+    matches: selector => selector === "input, textarea" && ["INPUT", "TEXTAREA"].includes(tag),
+    closest(selector) {
+      if (selector.startsWith("script, style")) return attributes.has("data-no-i18n") || tag === "PRE" ? node : parent?.closest(selector);
+      return node; // Test labels are inside the settings shell.
+    },
+    get textContent() { return node.childNodes.map(child => child.nodeValue || "").join(""); },
+  };
+  return node;
+}
+function appendText(parent, value) {
+  const text = {nodeType:3, parentElement:parent, nodeValue:value}; parent.childNodes.push(text); return text;
+}
+{
+  const body = element(), status = element("SPAN", {}, body), option = element("OPTION", {}, body);
+  body.childNodes.push(status, option);
+  const first = appendText(status, "暂无已授权用户"), label = appendText(option, "未连接");
+  const input = element("INPUT", {placeholder:"请输入 App Secret"}, body); input.value = "中文密钥不改"; body.childNodes.push(input);
+  const custom = element("SPAN", {"data-no-i18n":""}, body); body.childNodes.push(custom);
+  const customText = appendText(custom, "测试");
+  const app = runtime("en", false, body);
+  assert.equal(first.nodeValue, "No authorized users"); assert.equal(label.nodeValue, "Disconnected");
+  assert.equal(option.getAttribute("value"), "未连接");
+  assert.equal(input.getAttribute("placeholder"), "Enter App Secret");
+  assert.equal(input.value, "中文密钥不改"); assert.equal(customText.nodeValue, "测试");
+  const dynamic = element("SPAN", {}, body); body.childNodes.push(dynamic);
+  const message = appendText(dynamic, "尚未安装");
+  app.mutate([{type:"childList",addedNodes:[dynamic]}]);
+  assert.equal(message.nodeValue, "Not installed");
+  message.nodeValue = "正在本机运行"; app.mutate([{type:"characterData",target:message}]);
+  assert.equal(message.nodeValue, "Running on this computer");
+  app.window.XiaoALanguage.set("zh"); assert.equal(message.nodeValue, "正在本机运行");
+  const bilingual = element("SPAN", {"data-i18n-en":"WeChat · 测试 · Administrator"}, body);
+  body.childNodes.push(bilingual); const account = appendText(bilingual, "微信 · 测试 · 管理员");
+  app.mutate([{type:"childList",addedNodes:[bilingual]}]);
+  for (let i = 0; i < 3; i++) {
+    app.window.XiaoALanguage.set("en");
+    assert.equal(account.nodeValue, "WeChat · 测试 · Administrator");
+    assert.equal(customText.nodeValue, "测试"); assert.equal(input.value, "中文密钥不改");
+    app.window.XiaoALanguage.set("zh"); assert.equal(account.nodeValue, "微信 · 测试 · 管理员");
+    assert.equal(option.getAttribute("value"), "未连接");
+  }
+}
+assert(/html\[data-language="en"\] \.settings-nav::before\s*\{ content: "XiaoA settings"; \}/.test(fs.readFileSync("src/settings.html", "utf8")));
+console.log("Settings language: dynamic lists, templates, bilingual labels, option values, placeholders, user data and round trips passed");
+
+
+for (const [source, expected] of [
+  ["服务器：my-host · 部署 / 更新 · 云端当前版本 未部署", "Server: my-host · Deploy / Update · Cloud version Not deployed"],
+  ["云端端口：1985 · 服务运行中 · 健康检查通过 · 有未完成回退点，请修复", "Cloud port: 1985 · Service running · Health check passed · Unfinished rollback point; repair is required"],
+  ["3. 安装运行环境 · 进行中 · 12秒", "3. Install runtime · In progress · 12s"],
+  ["已完成 2/5 个执行步骤（另 1 步本次不执行） · 已排队", "2/5 steps completed (1 skipped this time) · Queued"],
+  ["已完成 1/6 个执行步骤 · 保留原始错误", "1/6 steps completed · 保留原始错误"],
+  ["已上传 50% · 100/200 字节", "Uploaded 50% · 100/200 bytes"],
+]) {
+  assert.equal(translate(source, "en"), expected);
+  assert.equal(translate(source, "zh"), source);
+}
+
+{
+  const body = element(), logs = element("PRE", {}, body);
+  logs.id = "cloud_deploy_logs"; logs.dataset = {i18nEmpty:"true"};
+  body.childNodes.push(logs); const label = appendText(logs, "尚无部署日志");
+  const app = runtime("en", false, body);
+  assert.equal(label.nodeValue, "No deployment logs yet");
+  app.window.XiaoALanguage.set("zh"); assert.equal(label.nodeValue, "尚无部署日志");
+  logs.dataset.i18nEmpty = "false";
+  label.nodeValue = "尚无部署日志"; // A real log may happen to match a known label.
+  app.window.XiaoALanguage.set("en"); assert.equal(label.nodeValue, "尚无部署日志");
+  app.mutate([{type:"characterData",target:label}]); assert.equal(label.nodeValue, "尚无部署日志");
+  logs.dataset.i18nEmpty = "true";
+  app.mutate([{type:"characterData",target:label}]); assert.equal(label.nodeValue, "No deployment logs yet");
+}
+console.log("Cloud language: progress templates, reversible empty state and verbatim real logs passed");
+
+// Include tools registered via CAD helper decorators, not just @registry.tool.
+const cadSource = fs.readFileSync("../backend/modules/cad/cad_module.py", "utf8");
+const cadNames = JSON.parse(cadSource.match(/EXPOSED_TOOLS = (\[[\s\S]*?\])/)[1].replace(/,\s*\]/, "]"));
+for (const name of cadNames) {
+  const description = toolDescription({name, side_effect:true});
+  assert(description, `Missing CAD English description: ${name}`);
+  assert(!/[\u3400-\u9fff]/.test(description), name);
+}
+const settingsHtml = fs.readFileSync("src/settings.html", "utf8");
+const lockHint = settingsHtml.match(/在飞书或微信发一句「锁定」[\s\S]*?远程无法解锁|在飞书或微信发一句「锁定」[\s\S]*?是无效的。/)[0];
+const englishLockHint = translate(lockHint, "en");
+assert(englishLockHint.includes('“lock”') && englishLockHint.includes('“unlock”'));
+assert(!/[\u3400-\u9fff]/.test(englishLockHint));
+// Exercise the real extension renderer, including the backend's explicit local marker.
+const extensionCode = settingsHtml.slice(settingsHtml.indexOf("    function renderExtensionList("), settingsHtml.indexOf("    async function loadExtensions("));
+const makeNode = () => ({children:[],dataset:{},append(...items){this.children.push(...items);},appendChild(item){this.children.push(item);}});
+const list = makeNode();
+const renderExtensions = new Function("document", "$", extensionCode + "; return renderExtensionList;")({createElement:makeNode},()=>list);
+renderExtensions("skill", [{name:"security-test",version:1,source:"本地"},{name:"中文名称",source:"https://example.test/中文来源"}]);
+const metadata = list.children.map(row=>row.children[0].children[1].children[0]);
+assert.equal(metadata[0].textContent, "v1 · 本地 · ");
+assert.equal(metadata[0].dataset.i18nEn, "v1 · Local · ");
+assert(metadata[1].dataset.i18nEn.includes("https://example.test/中文来源"));
+assert(!/id="modelMenu"[^>]*data-no-i18n/.test(html));
+console.log("Remaining language gaps: full CAD manifest, local extension source, English lock commands and model menu passed");
+
+// Use the renderer's real states so a renamed status cannot silently bypass translation.
+const traceStates = vm.runInNewContext("(" + fs.readFileSync("src/index.html", "utf8").match(/const TRACE_STATES = (\{[^;]+\});/)[1] + ")");
+for (const [state, english] of Object.entries({running:"Running", waiting:"Awaiting approval", completed:"Completed", failed:"Failed", stopped:"Stopped", interrupted:"Interrupted", limited:"Continuation needed"})) {
+  for (const [kind, label] of [["回复过程", "Reply trace"], ["执行过程", "Execution trace"]]) {
+    const source = `${traceStates[state]} · ${kind}`;
+    assert.equal(translate(source, "en"), `${english} · ${label}`);
+    assert.equal(translate(source, "zh"), source);
+  }
+}
+for (const [source, expected] of [
+  ["当前：正在准备回复", "Current: Preparing a reply"],
+  ["当前：正在等待回复", "Current: Waiting for a reply"],
+  ["当前：正在整理结果", "Current: Preparing results"],
+  ["当前：等待你确认操作", "Current: Waiting for your approval"],
+  ["当前：确认已收到，正在执行", "Current: Approval received; running"],
+  ["当前：操作已拒绝，正在整理结果", "Current: Operation rejected; preparing results"],
+  ["当前：正在从保存断点继续", "Current: Resuming from the saved checkpoint"],
+  ["当前：连接已恢复，正在继续处理", "Current: Connection restored; resuming"],
+  ["当前：自定义中文诊断", "Current: 自定义中文诊断"],
+  ["0 次操作 · 3 秒", "0 actions · 3s"],
+  ["2 次操作 · 1 分 5 秒", "2 actions · 1m 5s"],
+  ["模型等待 3 秒 · 工具执行 1 分 2 秒", "Model wait 3s · Tool execution 1m 2s"],
+  ["模型等待 3 秒", "Model wait 3s"],
+  ["工具执行 0 秒", "Tool execution 0s"],
+]) {
+  assert.equal(translate(source, "en"), expected);
+  assert.equal(translate(source, "zh"), source);
+}
+{
+  const body = element(), current = element("DIV", {}, body);
+  body.childNodes.push(current);
+  // Unlike the settings mock, require the actual live progress selector to match.
+  current.closest = selector => selector.startsWith("script, style") ? null : selector.split(/,\s*/).includes(".trace-current") ? current : null;
+  const app = runtime("en", false, body);
+  const status = appendText(current, "当前：正在准备回复");
+  app.mutate([{type:"childList", addedNodes:[status]}]);
+  assert.equal(status.nodeValue, "Current: Preparing a reply");
+  status.nodeValue = "当前：正在整理结果";
+  app.mutate([{type:"characterData", target:status}]);
+  assert.equal(status.nodeValue, "Current: Preparing results");
+  for (let i = 0; i < 3; i++) {
+    app.window.XiaoALanguage.set("zh");
+    assert.equal(status.nodeValue, "当前：正在整理结果");
+    app.window.XiaoALanguage.set("en");
+    assert.equal(status.nodeValue, "Current: Preparing results");
+  }
+}
+console.log("Task trace language: live title, current status, durations, timings and repeated toggles passed");
+
+const publishedNotes = [
+  "新增“中 / EN”语言切换，设置页、悬浮图标右键菜单和工具说明同步切换；新消息默认按界面语言回复，用户明确指定的语言优先。",
+  "完善 Office/WPS 文档与表格读取、编辑和保存的兼容处理；保留文件占用校验，不覆盖未保存内容或关闭用户原有实例。",
+  "优化启动及插件运行时缓存复用，减少重复准备；修复运行时缓存标记导致正式包验收误报的问题。",
+  "进一步加固 CAD/UIA 保存流程、窗口焦点和 PID 归属校验；未保存图纸、用户原有实例或任务失败时保留现场。",
+  "保留 CAD 二维绘图、编辑、9类尺寸标注与常用三维工具；正式包内置同版本云端文件。",
+];
+const englishPublishedNotes = [
+  "Added a Chinese/English toggle across settings, the floating-icon context menu and tool descriptions. New replies follow the interface language unless the user requests another language.",
+  "Improved Office/WPS document and spreadsheet compatibility for reading, editing and saving. File-lock checks remain in place; unsaved work and existing app instances are preserved.",
+  "Improved startup and plugin-runtime cache reuse to avoid repeated setup, and fixed a false release-validation failure caused by runtime cache markers.",
+  "Hardened CAD/UIA save workflows, window focus and PID ownership checks. Unsaved drawings, existing user instances and failed-task state are preserved.",
+  "Retained CAD 2D drawing and editing, nine dimension types and common 3D tools. The release includes matching-version cloud files.",
+];
+assert.equal(translate(publishedNotes.join("\n"), "en"), englishPublishedNotes.join("\n"));
+assert.equal(translate(publishedNotes.join("\n"), "zh"), publishedNotes.join("\n"));
+assert.equal(translate("当前下载版更新了什么", "en"), "What’s new in this release");
+for (const [line, expected] of [
+  ["[08:05:27] 云端连接成功，worker 已上线", "[08:05:27] Cloud connected successfully; worker is online"],
+  ["[08:05:17] 安装包上传完成，正在校验并创建回退点…", "[08:05:17] Package upload complete; verifying and creating a rollback point…"],
+  ["[08:05:17] 依赖未变化，复用已有运行环境", "[08:05:17] Dependencies unchanged; reusing the existing runtime"],
+  ["[08:05:18] 核验/生成本机连接 TLS 证书（已有指纹保留）", "[08:05:18] Verifying/creating the local-connection TLS certificate (existing fingerprint is preserved)"],
+  ["[08:05:18] 保留已有 token、密码和配置；写入小A服务定义", "[08:05:18] Preserving existing tokens, passwords and settings; writing the XiaoA service definition"],
+  ["[08:05:18] 申请公网 IP HTTPS 证书并配置自动续期（需放行公网 80）", "[08:05:18] Requesting a public-IP HTTPS certificate and configuring automatic renewal (public port 80 must be open)"],
+  ["[08:05:22] 正在保留原有配置并同步本次模型/飞书设置", "[08:05:22] Preserving existing settings and syncing the selected model/Feishu settings"],
+  ["[08:05:23] 检查 systemd 与 TLS 健康接口（最长 60 秒）", "[08:05:23] Checking systemd and the TLS health endpoint (up to 60 seconds)"],
+  ["[08:05:25] 云端健康检查通过 · 更新", "[08:05:25] Cloud health check passed · Update"],
+  ["[08:05:26] 云端已健康上线，正在保存本地连接配置", "[08:05:26] Cloud is healthy; saving the local connection settings"],
+  ["[08:05:26] 本地配置已保存，正在连接云端 worker…", "[08:05:26] Local settings saved; connecting to the cloud worker…"],
+  ["[08:05:27] 已上传 100% · 1024280/1024280 字节", "[08:05:27] Uploaded 100% · 1024280/1024280 bytes"],
+]) assert.equal(translateCloudLog(line, "en"), expected);
+assert.equal(translateCloudLog("[08:05:30] 用户自定义诊断保持中文", "en"), "[08:05:30] 用户自定义诊断保持中文");
+assert.equal(translateCloudLog("[08:05:30] 云端连接成功，worker 已上线", "zh"), "[08:05:30] 云端连接成功，worker 已上线");
+assert.equal(translate("云端连接成功，worker 已上线", "en"), "Cloud connected successfully; worker is online");
+assert.equal(translate("已完成 6/6 个执行步骤 · 云端连接成功，worker 已上线", "en"), "6/6 steps completed · Cloud connected successfully; worker is online");
+assert.equal(translate("最近操作：部署 / 更新 · 2026/10/26 08:05:27 · 云端连接成功，worker 已上线", "en"), "Latest operation: Deploy / Update · 2026/10/26 08:05:27 · Cloud connected successfully; worker is online");
+console.log("Cloud deployment and release-note English: screenshots, timestamped logs, dynamic status, safe custom diagnostics and locale changes passed");

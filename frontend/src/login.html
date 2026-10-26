@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'" />
+  <title>小A · 登录</title>
+  <style>
+    :root { color-scheme: light; --font-ui: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-ui);
+      background: #f4f7fb; color: #172033; -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: #fff; border: 1px solid #e1e8f1; border-radius: 14px; padding: 34px 30px; width: min(340px, calc(100vw - 32px));
+      box-shadow: 0 12px 32px rgba(28,52,84,.08); text-align: center;
+    }
+    .logo {
+      width: 56px; height: 56px; border-radius: 16px; background: #2563eb; color: #fff;
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;
+      font-size: 20px; font-weight: 700; box-shadow: 0 7px 16px rgba(47,111,237,.22);
+    }
+    h1 { font-size: 18px; margin: 0 0 5px; letter-spacing: -.01em; }
+    p.sub { font-size: 13px; color: #65748a; margin: 0 0 22px; }
+    input {
+      width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 11px 13px;
+      font-size: 14px; font-family: inherit; margin-bottom: 12px;
+    }
+    input:focus { outline: 2px solid rgba(37,99,235,.2); outline-offset: 1px; border-color: #2563eb; }
+    button {
+      width: 100%; border: 1px solid #2563eb; border-radius: 8px; padding: 11px; font-size: 14px;
+      background: #2563eb; color: #fff; cursor: pointer; font-family: inherit; font-weight: 500;
+    }
+      button:focus-visible { outline: 2px solid rgba(37,99,235,.3); outline-offset: 2px; }
+    button:disabled { opacity: .6; cursor: default; }
+    .err { color: #c33b35; font-size: 13px; margin-top: 10px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">小A</div>
+    <h1>请输入访问密码</h1>
+    <p class="sub">这台小A 设了密码保护</p>
+    <input type="password" id="pw" placeholder="访问密码" autofocus />
+    <button id="btn">进入</button>
+    <div class="err" id="err"></div>
+  </div>
+  <script src="./ui-language.js"></script>
+  <script>
+    const pw = document.getElementById("pw");
+    const btn = document.getElementById("btn");
+    const err = document.getElementById("err");
+
+    async function doLogin() {
+      const v = pw.value;
+      if (!v) { err.textContent = "请输入密码"; return; }
+      btn.disabled = true; err.textContent = "";
+      try {
+        const r = await fetch("/api/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: v }),
+        });
+        const d = await r.json();
+        if (d.ok) { location.href = "/"; return; }
+        err.textContent = d.error || "密码不对";
+      } catch (e) {
+        err.textContent = "登录失败:" + e.message;
+      }
+      btn.disabled = false;
+    }
+    btn.onclick = doLogin;
+    pw.addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+  </script>
+</body>
+</html>

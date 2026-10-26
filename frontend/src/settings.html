@@ -1,0 +1,3373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:1985 https:; img-src 'self' data:; media-src 'self' data: blob:; object-src 'none'; base-uri 'none'" />
+  <title>小A · 设置</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --font-ui: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+      --font-body: 14px;
+      --font-heading: 16px;
+      --font-muted: 12px;
+      --font-compact: 13px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: var(--font-ui); font-size: var(--font-body); line-height: 1.5;
+      background: #f4f7fb; color: #202b3b; -webkit-font-smoothing: antialiased; }
+    .settings-shell { display: grid; width: min(1180px, 100%); grid-template-columns: 200px minmax(0, 920px); gap: 34px;
+      justify-content: center; align-items: start; padding: 30px 24px 40px; }
+    .settings-nav { position: sticky; top: 24px; display: grid; gap: 4px; padding: 8px 0;
+      border-right: 1px solid #dfe5ed; }
+    html[data-language="en"] .settings-nav::before { content: "XiaoA settings"; }
+    .settings-nav button { width: 100%; min-height: 38px; padding: 9px 11px; text-align: left; background: transparent;
+      color: #4b5563; font-size: var(--font-body); }
+    .settings-nav button:hover { background: #e9eff7; }
+    .settings-nav button.active { background: #e7effd; color: #2459b8; font-weight: 650;
+      box-shadow: inset 3px 0 #2f6fed; }
+    .settings-main { min-width: 0; }
+    .settings-page[hidden] { display: none; }
+    h1 { font-size: 22px; line-height: 1.3; margin: 0 0 4px; letter-spacing: 0; }
+    .sub { color: #66758a; font-size: 13px; margin-bottom: 20px; }
+    .card { background: transparent; border: 0; border-bottom: 1px solid #dfe5ed; border-radius: 0; padding: 16px 0 20px; margin-bottom: 8px; }
+    .settings-page > .card:last-child { border-bottom: 0; }
+    .card h2 { font-size: var(--font-heading); margin: 0 0 12px; color: #27364a; letter-spacing: 0; }
+    label { display: block; font-size: var(--font-compact); color: #374151; margin: 10px 0 4px; }
+    input, select, textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 6px;
+      min-height: 40px; padding: 8px 11px; font-size: var(--font-body); font-family: inherit; color: #202b3b; background: #fff; }
+    textarea { min-height: 84px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { outline: 2px solid rgba(47,111,237,.2); outline-offset: 1px; border-color: #2f6fed; }
+    .check-row { display: flex; align-items: center; gap: 7px; }
+    .check-row input { width: auto; margin: 0; }
+    .sched-days { display: flex; flex-wrap: wrap; gap: 10px; }
+    .sched-item { display: flex; align-items: center; gap: 10px; border-top: 1px solid #e4e6eb; padding-top: 9px; }
+    .sched-item .sched-info { min-width: 0; flex: 1; }
+    .sched-item .sched-name { font-size: var(--font-body); font-weight: 650; }
+    .sched-item .sched-meta { color: #9ca3af; font-size: var(--font-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sched-item .sched-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+    .sched-item .sched-actions button { padding: 6px 10px; font-size: var(--font-compact); background: #eef2ff; color: #2563eb; }
+    .sched-item .sched-off { color: #9ca3af; }
+    .sched-empty { font-size: var(--font-muted); color: #9ca3af; padding: 3px 0; }
+    .hint { font-size: var(--font-muted); color: #68778b; margin-top: 4px; line-height: 1.55; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    .provider-list { display: grid; gap: 16px; }
+    .provider-block + .provider-block { border-top: 1px solid #e4e6eb; padding-top: 16px; }
+    .provider-head { display: flex; align-items: center; gap: 8px; }
+    .provider-head input { font-weight: 650; }
+    .provider-badge { flex: none; padding: 4px 7px; border-radius: 999px; background: #eef2ff; color: #2563eb; font-size: var(--font-muted); }
+    .remove-provider { width: 38px; height: 38px; padding: 0; flex: none; background: #fef2f2; color: #b91c1c; font-size: 18px; }
+    .model-list { display: grid; gap: 8px; }
+    .model-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(120px, 150px) minmax(150px, auto) auto; align-items: center; gap: 8px; }
+    .model-row input { min-width: 0; }
+    .model-row select { width: auto; min-width: 92px; height: 38px; padding: 0 9px; }
+    .test-model { height: 38px; padding: 0 12px; background: #eef2ff; color: #2563eb; }
+    .remove-model { width: 38px; height: 38px; padding: 0; flex: none; background: #f1f0ed; color: #6b6862; font-size: 18px; }
+    .model-test-status { display: none; grid-column: 1 / -1; font-size: var(--font-muted); line-height: 1.4; }
+    .model-test-status.pending { display: block; color: var(--settings-muted); }
+    .model-test-status.ok { display: block; color: #16a34a; }
+    .model-test-status.err { display: block; color: #dc2626; }
+    .add-model { padding: 8px 12px; background: #eef2ff; color: #2563eb; }
+    .model-actions { display: grid; grid-template-columns: repeat(3, minmax(0, max-content)); align-items: center; gap: 8px; margin-top: 8px; }
+    .model-actions button { min-width: 0; height: auto; min-height: 40px; white-space: nowrap; }
+    .model-actions .model-discovery-status { grid-column: 1 / -1; }
+    .discover-models { padding: 8px 12px; }
+    .model-picker { grid-column: 1 / -1; min-width: 150px; min-height: 38px; padding: 6px 9px; }
+    .model-picker[hidden] { display: none; }
+    .model-discovery-status { color: #68778b; font-size: var(--font-muted); line-height: 1.4; }
+    .model-discovery-status.ok { color: #16a34a; }
+    .model-discovery-status.err { color: #dc2626; }
+    .add-provider { margin-top: 14px; width: 100%; background: #eef2ff; color: #2563eb; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+    .actions[hidden], #feishu_pending_panel[hidden] { display: none; }
+    button { border: 1px solid transparent; border-radius: 7px; min-height: 38px; padding: 8px 14px; font-size: 14px; cursor: pointer; font-family: inherit; color: inherit; transition: background .15s, border-color .15s, color .15s; }
+    button:hover { filter: brightness(.97); }
+    button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .save { background: #2f6fed; color: #fff; }
+    .secondary { background: #e9f0fc; color: #2459b8; }
+    .msg { font-size: var(--font-compact); }
+    .msg.ok { color: #16a34a; } .msg.err { color: #dc2626; }
+    .service-state { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin-bottom: 16px; padding: 11px 14px; border: 1px solid #fecaca; border-radius: 8px;
+      background: #fef2f2; color: #b91c1c; font-size: var(--font-compact); }
+    .service-state[hidden] { display: none; }
+    .service-state button { flex: none; padding: 7px 10px; background: #fff; color: #b91c1c; }
+    #cloud_web_url { overflow-wrap: anywhere; }
+    .inline-info { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-size: var(--font-muted); color: #6b7280; }
+    .inline-info code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #374151; }
+    .inline-info button { flex: none; padding: 5px 9px; font-size: var(--font-muted); background: #eef2ff; color: #2563eb; }
+    .connection-status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; margin-top: 9px;
+      font-size: var(--font-muted); color: var(--settings-muted); }
+    .connection-status-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 6px; min-width: 0; }
+    .connection-status-item strong { min-width: 0; color: var(--settings-ink); font-weight: 650; overflow-wrap: anywhere; }
+    .channel-account-list, .authorized-id-list { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }
+    .channel-account-list { container-type: inline-size; }
+    .channel-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 16px; }
+    .channel-section-heading strong { color: var(--settings-ink); font-size: 13px; }
+    .channel-account-row {
+      display: grid; grid-template-columns: minmax(180px, 1.35fr) minmax(135px, 1fr) minmax(112px, .85fr) auto;
+      align-items: center; justify-items: stretch; gap: 14px; min-width: 0; padding: 10px 12px;
+      border: 1px solid var(--settings-line); border-radius: 10px; background: var(--settings-panel);
+    }
+    .channel-account-identity { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; }
+    .channel-account-index { flex: none; width: 22px; color: var(--settings-muted); font-weight: 700; text-align: right; }
+    .channel-account-copy { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; }
+    .channel-account-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .channel-account-state { color: #168152; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .channel-account-actions { display: contents; }
+    .channel-account-remote { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .channel-account-remote > span { color: var(--settings-muted); font-size: 12px; white-space: nowrap; }
+    .channel-account-row button { flex: none; white-space: nowrap; }
+    .channel-account-remark { width: 100%; max-width: 160px; min-width: 0; min-height: 34px; padding: 6px 9px; justify-self: start; }
+    .channel-remote-toggle {
+      display: inline-flex; align-items: center; justify-content: flex-start;
+      width: 46px; height: 24px; min-height: 24px; padding: 2px;
+      border: 1px solid var(--settings-line); border-radius: 999px;
+      background: var(--settings-control); color: var(--settings-muted);
+      transition: background .15s, border-color .15s;
+    }
+    .channel-remote-toggle[data-control-state="on"] { background: var(--settings-brand); border-color: var(--settings-brand); color: #fff; }
+    .channel-toggle-dot {
+      width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--settings-muted);
+      transition: background .15s, transform .15s;
+    }
+    .channel-remote-toggle[data-control-state="on"] .channel-toggle-dot { background: #fff; transform: translateX(22px); }
+    .channel-remote-toggle[data-control-state="mixed"] { border-color: var(--settings-brand); }
+    .channel-toggle-text { display: none; }
+    .channel-account-remove { min-height: 34px; padding: 6px 11px; }
+    .authorized-id-list { margin-top: 10px; }
+    .authorized-id-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px;
+      min-width: 0; padding: 8px 10px; border-top: 1px solid var(--settings-line);
+    }
+    .authorized-id-row:first-child { border-top: 0; }
+    .authorized-id-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .authorized-id-row button { min-height: 34px; padding: 6px 11px; }
+    .channel-lock-hint { margin-top: 9px; }
+    .extension-install { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 8px; }
+    .extension-install button { padding: 9px 14px; background: #2563eb; color: #fff; }
+    .extension-group { margin-top: 14px; }
+    .extension-group h3 { font-size: var(--font-compact); margin: 0 0 7px; color: #374151; }
+    .extension-list { display: grid; gap: 7px; }
+    .extension-item { display: flex; align-items: center; gap: 8px; border-top: 1px solid #e4e6eb; padding-top: 7px; }
+    .extension-info { min-width: 0; flex: 1; }
+    .extension-name { font-size: var(--font-body); font-weight: 650; }
+    .extension-meta { color: #9ca3af; font-size: var(--font-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .extension-state { color: #16a34a; }
+    .extension-state.off { color: #9ca3af; }
+    .extension-actions { display: flex; gap: 6px; flex: none; }
+    .extension-actions button { padding: 6px 9px; font-size: var(--font-compact); background: #eef2ff; color: #2563eb; }
+    .extension-empty { font-size: var(--font-muted); color: #9ca3af; padding: 3px 0; }
+    .extension-review { margin-top: 10px; padding: 10px 12px; border: 1px solid #fecaca;
+      border-radius: 8px; background: #fef2f2; color: #7f1d1d; font-size: var(--font-muted); }
+    .extension-review[hidden] { display: none; }
+    .extension-review pre { max-height: 220px; margin: 7px 0 0; overflow: auto; white-space: pre-wrap;
+      overflow-wrap: anywhere; color: #374151; }
+    .tool-summary { color: #6b7280; font-size: var(--font-muted); margin-bottom: 10px; }
+    .tool-groups { display: grid; gap: 8px; }
+    .tool-group { border-top: 1px solid #e4e6eb; padding-top: 8px; }
+    .tool-group summary { cursor: pointer; font-size: var(--font-compact); font-weight: 650; color: #374151; }
+    .tool-list { display: grid; gap: 7px; padding: 9px 0 2px; }
+    .tool-item { display: grid; grid-template-columns: minmax(120px, 180px) minmax(0, 1fr); gap: 10px;
+      font-size: var(--font-muted); line-height: 1.45; }
+    .tool-item code { color: #2563eb; overflow-wrap: anywhere; }
+    .tool-description { color: #6b7280; }
+    .audit-toolbar { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 8px; align-items: end; }
+    .audit-toolbar label { margin-top: 0; }
+    .audit-toolbar button { height: 38px; padding: 0 12px; }
+    .audit-list { display: grid; gap: 7px; margin-top: 12px; }
+    .audit-item { border-top: 1px solid #e4e6eb; padding-top: 8px; }
+    .audit-item summary { cursor: pointer; display: grid; grid-template-columns: minmax(0,1fr) auto;
+      gap: 10px; font-size: var(--font-muted); }
+    .audit-title { font-weight: 650; color: #374151; overflow-wrap: anywhere; }
+    .audit-meta, .audit-detail { color: #6b7280; }
+    .audit-detail { margin-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-muted); }
+    @media (max-width: 760px) {
+      .settings-shell { display: block; width: 100%; padding: 16px 18px 28px; }
+      .settings-nav { position: static; display: flex; overflow-x: auto; gap: 4px; margin-bottom: 18px;
+        padding: 0 0 8px; border-right: 0; border-bottom: 1px solid #dfe5ed; }
+      .settings-nav button { width: 100%; min-height: 40px; padding: 8px 11px; white-space: nowrap; }
+      .settings-nav button.active { box-shadow: inset 0 -2px var(--settings-brand); }
+      .settings-main { width: 100%; }
+    }
+    @media (max-width: 520px) {
+      .settings-shell { padding: 12px 14px 24px; }
+      .settings-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .row { flex-direction: column; gap: 0; }
+      .model-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+      .model-row select { grid-column: 1 / -1; width: 100%; }
+      .extension-install { grid-template-columns: 96px minmax(0, 1fr); }
+      .extension-install button { grid-column: 1 / -1; }
+      .tool-item { grid-template-columns: 1fr; gap: 2px; }
+      .audit-toolbar { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 560px) {
+      input, select, textarea { font-size: 16px; min-height: 44px; }
+      button { min-height: 44px; }
+      .settings-shell { padding: 12px 10px max(20px, env(safe-area-inset-bottom)); }
+      .settings-nav { height: auto; min-height: 0; max-height: none; grid-template-rows: repeat(2, minmax(44px, auto)); grid-auto-rows: minmax(44px, auto); }
+      .settings-nav button { min-height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+    a { color: #2459b8; }
+    a { color: #2563eb; }
+
+    /* 小A工作台视觉基线：保留现有控件与脚本，只统一层级、字体和交互状态。 */
+    :root {
+      color-scheme: light;
+      --settings-bg: #eef2f7;
+      --settings-panel: #ffffff;
+      --settings-ink: #172033;
+      --settings-muted: #65748a;
+      --settings-line: #d9e1eb;
+      --settings-brand: #2f6fed;
+      --settings-brand-soft: #edf4ff;
+      --settings-control: #f8fafc;
+      --settings-danger-soft: #fff3f2;
+      --settings-radius: 14px;
+      --settings-font: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --settings-bg: #151b24;
+      --settings-panel: #202735;
+      --settings-ink: #f3f6fb;
+      --settings-muted: #aab6c7;
+      --settings-line: #354154;
+      --settings-brand: #79a7ff;
+      --settings-brand-soft: #263b60;
+      --settings-control: #2b3545;
+      --settings-danger-soft: #3b2728;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      background: var(--settings-bg);
+      color: var(--settings-ink);
+      font-family: var(--settings-font);
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .settings-shell {
+      width: min(1120px, 100%);
+      grid-template-columns: 196px minmax(0, 820px);
+      gap: 30px;
+      padding: 30px 28px 48px;
+    }
+    .settings-nav {
+      top: 24px;
+      gap: 4px;
+      padding: 12px;
+      background: var(--settings-panel);
+      border: 1px solid var(--settings-line);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(25, 42, 66, .06);
+    }
+    .settings-nav::before {
+      content: "小A设置";
+      display: block;
+      padding: 4px 10px 12px;
+      color: var(--settings-ink);
+      font-size: 16px;
+      font-weight: 720;
+      letter-spacing: .01em;
+    }
+    .settings-nav button {
+      min-height: 40px;
+      padding: 9px 11px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--settings-muted);
+      font-weight: 550;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .settings-nav button:hover {
+      background: var(--settings-control);
+      color: var(--settings-ink);
+    }
+    .settings-nav button.active {
+      background: var(--settings-brand-soft);
+      border-color: var(--settings-line);
+      color: var(--settings-brand);
+      font-weight: 700;
+      box-shadow: none;
+    }
+    .settings-main { max-width: 820px; }
+    h1 {
+      color: var(--settings-ink);
+      font-size: 26px;
+      line-height: 1.2;
+      letter-spacing: -.015em;
+      margin: 2px 0 7px;
+    }
+    .sub {
+      color: var(--settings-muted);
+      font-size: 13px;
+      margin-bottom: 22px;
+    }
+    .card {
+      background: var(--settings-panel);
+      border: 1px solid var(--settings-line);
+      border-radius: var(--settings-radius);
+      padding: 21px 22px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 24px rgba(25, 42, 66, .045);
+    }
+    .card h2 {
+      color: var(--settings-ink);
+      font-size: 16px;
+      line-height: 1.35;
+      letter-spacing: 0;
+      margin: 0 0 15px;
+    }
+    label {
+      color: var(--settings-ink);
+      font-size: 13px;
+      font-weight: 600;
+      margin: 12px 0 5px;
+    }
+    input, select, textarea {
+      background: var(--settings-control);
+      border: 1px solid var(--settings-line);
+      border-radius: 10px;
+      color: var(--settings-ink);
+      min-height: 42px;
+      padding: 9px 12px;
+      font-family: inherit;
+      font-size: 14px;
+      transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+    textarea { min-height: 88px; resize: vertical; }
+    input:hover, select:hover, textarea:hover { border-color: #bdcadd; }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      background: var(--settings-panel);
+      border-color: var(--settings-brand);
+      box-shadow: 0 0 0 3px rgba(47, 111, 237, .13);
+    }
+    input[type="checkbox"] { accent-color: var(--settings-brand); }
+    .check-row { color: var(--settings-ink); font-weight: 550; }
+    .check-row input { width: 16px; height: 16px; min-height: 16px; padding: 0; flex: none; }
+    .hint, .tool-summary { color: var(--settings-muted); line-height: 1.55; }
+    .row { gap: 14px; }
+    .provider-list { gap: 18px; }
+    .provider-block + .provider-block,
+    .sched-item, .extension-item, .tool-group, .audit-item { border-color: #e6ebf2; }
+    .provider-head { gap: 10px; }
+    .provider-badge {
+      padding: 5px 8px;
+      border: 1px solid #d9e7ff;
+      border-radius: 8px;
+      background: var(--settings-brand-soft);
+      color: var(--settings-brand);
+      font-weight: 650;
+    }
+    .model-row { gap: 9px; }
+    .model-row select { min-height: 42px; }
+    button {
+      min-height: 40px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 9px 15px;
+      font-weight: 650;
+      transition: background .15s, border-color .15s, color .15s, box-shadow .15s, transform .1s;
+    }
+    button:hover { filter: none; transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button:focus-visible, a:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--settings-brand);
+      outline-offset: 2px;
+    }
+    .save, .extension-install button {
+      background: var(--settings-brand);
+      color: #fff;
+      box-shadow: 0 4px 10px rgba(47, 111, 237, .18);
+    }
+    .save:hover, .extension-install button:hover { background: #245dcf; }
+    .secondary, .add-model, .discover-models, .add-provider, .test-model, .extension-actions button, .inline-info button,
+    .sched-item .sched-actions button {
+      background: var(--settings-brand-soft);
+      border-color: var(--settings-line);
+      color: var(--settings-brand);
+    }
+    .secondary:hover, .add-model:hover, .discover-models:hover, .add-provider:hover, .test-model:hover,
+    .extension-actions button:hover { background: #e1edff; }
+    .add-provider { width: 100%; margin-top: 16px; }
+    .remove-provider { background: var(--settings-danger-soft); border-color: #ffd7d3; color: #b3342c; }
+    .remove-model { background: #f1f4f7; border-color: #e1e7ee; color: #66758a; }
+    .msg.ok { color: #168152; }
+    .msg.err { color: #c33b35; }
+    .service-state {
+      border-color: #c76b65;
+      border-radius: 12px;
+      background: var(--settings-danger-soft);
+      color: #c76b65;
+      padding: 12px 14px;
+    }
+    .service-state button { background: #fff; border-color: #f2c8c4; color: #a6312c; }
+    .extension-review { border-radius: 12px; background: var(--settings-danger-soft); }
+    .extension-state { color: #168152; font-weight: 650; }
+    .tool-group summary, .audit-title { color: #34445a; }
+    .tool-item code { color: #245ac2; }
+    .audit-toolbar { gap: 10px; }
+    .cloud-maintenance { border-top: 1px solid #e6ebf2; margin-top: 18px; padding-top: 16px; }
+    .cloud-maintenance h3 { color: #34445a; font-size: var(--font-compact); line-height: 1.35; margin: 0 0 7px; }
+    details {
+      border-top: 1px solid var(--settings-line);
+      margin-top: 18px;
+      padding-top: 16px;
+    }
+    details > summary { color: #34445a; cursor: pointer; font-weight: 700; }
+    code { color: #245ac2; }
+    a { color: #245ac2; }
+    .actions { gap: 10px; }
+    #project_libraries_card { container-type: inline-size; }
+    .project-library-actions { display: grid; grid-template-columns: repeat(3, max-content); }
+    @container (max-width: 520px) {
+      .project-library-actions { grid-template-columns: minmax(0, 1fr); }
+    }
+    .settings-main > .actions { padding-top: 2px; }
+    .settings-main > #page_save_actions { margin: 0 0 16px; padding-top: 2px; }
+    :root[data-theme="dark"] .settings-nav button:hover { color: var(--settings-ink); }
+    :root[data-theme="dark"] .save:hover, :root[data-theme="dark"] .extension-install button:hover { background: #648fe8; }
+    :root[data-theme="dark"] .service-state button { background: var(--settings-panel); }
+    :root[data-theme="dark"] .extension-review pre { color: var(--settings-ink); }
+
+    @media (max-width: 760px) {
+      .settings-shell { display: block; padding: 14px 16px 28px; }
+      .settings-nav {
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-rows: repeat(2, 36px);
+        grid-auto-rows: 36px;
+        align-content: start;
+        align-items: stretch;
+        height: 84px;
+        min-height: 84px;
+        max-height: 84px;
+        overflow: hidden;
+        gap: 4px;
+        margin-bottom: 16px;
+        padding: 6px;
+      }
+      .settings-nav::before { display: none; }
+      .settings-nav button {
+        width: 100%;
+        min-height: 36px;
+        padding: 5px 4px;
+        text-align: center;
+        white-space: nowrap;
+      }
+      .settings-nav button.active { box-shadow: none; }
+      .settings-main { max-width: none; }
+    }
+    @container (max-width: 680px) {
+      .channel-account-row {
+        grid-template-columns: minmax(120px, 180px) minmax(120px, 1fr);
+        gap: 8px 12px;
+      }
+      .channel-account-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+      }
+    }
+    @media (max-width: 560px) {
+      .card { padding: 18px 16px; }
+      .row { flex-direction: column; gap: 0; }
+      .channel-account-row { grid-template-columns: 1fr; align-items: stretch; gap: 8px; }
+      .channel-account-remark { max-width: none; }
+      .channel-account-actions { display: grid; justify-content: start; justify-items: start; gap: 8px; }
+      .model-row { grid-template-columns: minmax(0, 1fr) 42px; gap: 8px; }
+      .model-row input { grid-column: 1; grid-row: 1; }
+      .model-row .model-context-window { grid-column: 1 / -1; grid-row: 2; width: 100%; }
+      .model-row .model-picker { grid-column: 1 / -1; width: 100%; min-width: 0; }
+      .model-row .model-reasoning { grid-column: 1 / -1; width: 100%; }
+      .model-row .remove-model { grid-column: 2; grid-row: 1; width: 42px; }
+      .model-actions { grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); }
+      .model-actions button { width: 100%; padding: 8px 4px; font-size: var(--font-compact); }
+      .connection-status { gap: 9px 12px; }
+      .connection-status-item { grid-template-columns: 1fr; gap: 2px; }
+      .audit-toolbar { grid-template-columns: 1fr 1fr; }
+      .audit-toolbar button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+    .cloud-progress-panel { margin-top: 16px; padding: 16px; background: var(--settings-control); border: 1px solid var(--settings-line); border-radius: var(--settings-radius); }
+    .cloud-steps { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 8px; }
+    .cloud-steps li { display: flex; gap: 8px; align-items: baseline; color: var(--settings-muted); }
+    .cloud-steps li[data-state="running"] { color: var(--settings-brand); font-weight: 600; }
+    .cloud-steps li[data-state="error"], .cloud-steps li[data-state="warning"] { color: var(--settings-ink); font-weight: 600; }
+    .cloud-progress-panel progress { width: 100%; height: 12px; accent-color: var(--settings-brand); }
+    .cloud-progress-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: inherit; font-size: 12px; }
+    .cloud-progress-panel summary { cursor: pointer; color: var(--settings-muted); }
+    .settings-dialog {
+      width: min(520px, calc(100% - 32px));
+      max-width: calc(100vw - 32px);
+      min-height: 190px;
+      padding: 0;
+      border: 1px solid var(--settings-line);
+      border-radius: var(--settings-radius);
+      background: var(--settings-panel);
+      color: var(--settings-ink);
+      box-shadow: 0 22px 60px rgba(4, 10, 20, .38);
+    }
+    .settings-dialog::backdrop { background: rgba(4, 10, 20, .58); }
+    .settings-dialog-card {
+      min-height: 190px;
+      display: flex;
+      flex-direction: column;
+      padding: 22px 24px 20px;
+    }
+    .settings-dialog-title { margin: 0; color: var(--settings-ink); font-size: 18px; line-height: 1.35; }
+    .settings-dialog-message {
+      margin: 12px 0 0;
+      color: var(--settings-muted);
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .settings-dialog [hidden] { display: none; }
+    .settings-dialog-label { margin-top: 16px; }
+    .settings-dialog-input { width: 100%; margin-top: 6px; }
+    .settings-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 22px; }
+    .settings-dialog.danger .settings-dialog-confirm {
+      background: #c33b35;
+      border-color: #c33b35;
+      color: #fff;
+    }
+    .settings-dialog.danger .settings-dialog-confirm:hover { background: #a92f2a; }
+    :root[data-theme="dark"] .settings-dialog.danger .settings-dialog-confirm { background: #d95d57; border-color: #d95d57; }
+    :root[data-theme="dark"] .settings-dialog.danger .settings-dialog-confirm:hover { background: #e3746e; }
+    @media (max-width: 560px) {
+      .settings-dialog-card { padding: 20px 18px 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="settings-shell">
+  <nav class="settings-nav" aria-label="设置分类">
+    <button type="button" data-page-target="models">模型服务</button>
+    <button type="button" data-page-target="voice">语音与对话</button>
+    <button type="button" data-page-target="memory">记忆与备份</button>
+    <button type="button" data-page-target="schedule">定时任务</button>
+    <button type="button" data-page-target="connections">消息连接</button>
+    <button type="button" data-page-target="capabilities">能力与扩展</button>
+    <button type="button" data-page-target="system">电脑与安全</button>
+  </nav>
+  <main class="settings-main">
+  <h1 id="page_title">设置</h1>
+  <div class="sub" id="page_subtitle">每个页面独立保存。密钥不修改时保持原值。</div>
+  <div class="hint" id="runtime_scope_hint" hidden>当前管理此云服务器：模型、账号和项目数据仅保存在这台服务器，不会成为其他小A安装的默认配置。</div>
+  <div class="service-state" id="service_state" role="alert" hidden>
+    <span id="service_state_text">设置服务未连接，正在重试。</span>
+    <button id="retry_load" type="button">重新连接</button>
+  </div>
+  <div class="service-state" id="security_state" role="alert" hidden>
+    <span id="security_state_text"></span>
+  </div>
+
+  <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsDialogTitle" aria-describedby="settingsDialogMessage">
+    <form id="settingsDialogForm" class="settings-dialog-card" novalidate>
+      <h2 id="settingsDialogTitle" class="settings-dialog-title">确认操作</h2>
+      <p id="settingsDialogMessage" class="settings-dialog-message"></p>
+      <label id="settingsDialogLabel" class="settings-dialog-label" for="settingsDialogInput" hidden>输入内容</label>
+      <input id="settingsDialogInput" class="settings-dialog-input" type="text" autocomplete="off" hidden />
+      <div class="settings-dialog-actions">
+        <button id="settingsDialogCancel" class="secondary" type="button">取消</button>
+        <button id="settingsDialogConfirm" class="save settings-dialog-confirm" type="submit">确定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <section class="settings-page" data-page="models">
+  <div class="card">
+    <h2>大模型接口</h2>
+    <div class="provider-list" id="provider_list"></div>
+    <button class="add-provider" id="add_provider" type="button">+ 添加厂商接口</button>
+    <div class="hint">每个厂商独立使用自己的 Base URL、API Key 和模型；默认接口的第一个模型同时用于对话和图片理解。推理强度在模型右侧设置。</div>
+    <div class="hint model-context-hint">填写对话模型支持的上下文窗口大小；达到约75%时，小A会自动压缩较早的工具结果。</div>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="memory" hidden>
+  <div class="card">
+    <h2>本地记忆备份</h2>
+    <label>备份保存目录</label>
+    <input id="memory_backup_dir" placeholder="留空默认保存到 data\backup，例如 D:\小A记忆备份" />
+    <div class="row">
+      <div><label>备份间隔(分钟)</label><input id="memory_backup_interval" type="number" min="5" max="10080" /></div>
+      <div><label>保留快照数量</label><input id="memory_backup_keep" type="number" min="2" max="365" /></div>
+    </div>
+    <div class="actions">
+      <button class="secondary" id="backup_now" type="button">立即备份</button>
+      <span class="msg" id="backup_status"></span>
+    </div>
+    <div class="hint">实际目录：<span id="memory_backup_resolved">…</span>。每次备份单独保存一份，失败后会在 5 分钟内重试。</div>
+    <div class="hint" id="memory_sync_status" aria-live="polite">正在读取云端同步记录…</div>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="schedule" hidden>
+  <div class="card">
+    <h2>新建定时任务</h2>
+    <div class="row">
+      <div><label>任务名称</label><input id="sched_name" placeholder="例如：每天饮水提醒" /></div>
+      <div><label>任务类型</label>
+        <select id="sched_kind">
+          <option value="remind">发送提醒</option>
+          <option value="execute">到点执行任务</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div><label>重复方式</label>
+        <select id="sched_schedule">
+          <option value="daily">每天</option>
+          <option value="weekly">每周</option>
+          <option value="once">一次性</option>
+        </select>
+      </div>
+    </div>
+    <div id="sched_week_row" hidden>
+      <label>执行日期（每周）</label>
+      <div class="sched-days">
+        <label class="check-row"><input type="checkbox" value="0" checked /> 周一</label>
+        <label class="check-row"><input type="checkbox" value="1" /> 周二</label>
+        <label class="check-row"><input type="checkbox" value="2" /> 周三</label>
+        <label class="check-row"><input type="checkbox" value="3" /> 周四</label>
+        <label class="check-row"><input type="checkbox" value="4" /> 周五</label>
+        <label class="check-row"><input type="checkbox" value="5" /> 周六</label>
+        <label class="check-row"><input type="checkbox" value="6" /> 周日</label>
+      </div>
+    </div>
+    <div class="row" id="sched_time_row">
+      <div><label id="sched_time_label">执行时间（每天）</label><input id="sched_time" value="09:00" type="time" /></div>
+    </div>
+    <div id="sched_once_row" hidden>
+      <label>执行日期（一次性）</label>
+      <input id="sched_datetime" type="date" />
+    </div>
+    <div class="row">
+      <div><label>送达渠道</label>
+        <select id="sched_channel">
+          <option value="weixin" selected>微信</option>
+          <option value="feishu">飞书</option>
+        </select>
+      </div>
+    </div>
+    <label for="sched_recipient">接收用户</label>
+    <select id="sched_recipient" aria-describedby="sched_recipient_hint"><option value="">正在读取…</option></select>
+    <div class="hint" id="sched_recipient_hint">多个账号或用户时，选择本任务的消息接收人。</div>
+    <div class="hint" style="margin-top:8px"><strong>执行位置（自动识别）</strong> <span id="sched_location_status" role="status" aria-live="polite">正在读取云端连接状态…</span><br>执行位置决定任务在哪台设备运行，根据云端连接自动判断；“送达渠道”则决定通知发送到哪里。如果任务由云端执行，云端需要已配置所选渠道。</div>
+    <label>提醒内容 / 执行指令</label>
+    <input id="sched_text" placeholder="remind=提醒文字；execute=要小A执行的指令" />
+    <div class="actions">
+      <button class="secondary" id="sched_add" type="button">添加任务</button>
+      <span class="msg" id="sched_form_status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>已有任务</h2>
+    <div class="extension-list" id="sched_list"></div>
+    <div class="hint">到点后按任务选择发送到飞书或微信。云端任务由云端渠道发送；本机在线时会同步显示提醒。电脑关机不影响云端执行；云端状态由云端维护，本地记录可能延迟。</div>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="capabilities" hidden>
+  <div class="card">
+    <h2>内置能力</h2>
+    <div class="tool-summary" id="tool_summary">正在读取本机工具…</div>
+    <div class="tool-groups" id="tool_groups"></div>
+  </div>
+
+  <div class="card">
+    <h2>扩展能力</h2>
+    <div class="extension-install">
+      <select id="extension_kind" aria-label="扩展类型">
+        <option value="tool">工具</option>
+        <option value="plugin">隔离插件</option>
+        <option value="skill">技能</option>
+      </select>
+      <input id="extension_url" type="url" placeholder="https://github.com/作者/项目" aria-label="GitHub 地址" />
+      <button id="install_extension" type="button">检查</button>
+    </div>
+    <div class="hint">先下载并显示第三方内容供审查，明确确认后才安装；插件使用独立 Python/Node 环境，SKILL.md 不执行仓库脚本。</div>
+    <div class="extension-review" id="extension_review" hidden>
+      <strong id="extension_review_warning">第三方内容不可信，请核对后再安装。</strong>
+      <pre id="extension_review_content"></pre>
+    </div>
+    <div class="msg" id="extension_status" role="status" aria-live="polite"></div>
+    <section class="extension-group">
+      <h3>工具</h3>
+      <div class="extension-list" id="tool_extensions"></div>
+    </section>
+    <section class="extension-group">
+      <h3>技能</h3>
+      <div class="extension-list" id="skill_extensions"></div>
+    </section>
+    <section class="extension-group">
+      <h3>隔离插件</h3>
+      <div class="extension-list" id="plugin_extensions"></div>
+    </section>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="voice" hidden>
+  <div class="card" id="tencent_voice_card">
+    <h2>腾讯云(识别 + 合成)</h2>
+    <label>SecretId</label>
+    <input id="tc_secret_id" placeholder="AKID..." />
+    <label>SecretKey</label>
+    <input id="tc_secret_key" placeholder="留空则不修改" />
+    <label>地域 Region</label>
+    <input id="tc_region" placeholder="ap-guangzhou" />
+    <label for="tts_voice">小A音色</label>
+    <select id="tts_voice">
+      <optgroup label="大模型音色（自然、中英混读好）">
+        <option value="601000">大模型 601000</option>
+        <option value="601003">大模型 601003</option>
+        <option value="601005">大模型 601005</option>
+        <option value="601007">大模型 601007</option>
+        <option value="601009">大模型 601009</option>
+        <option value="601010">大模型 601010</option>
+        <option value="601012">大模型 601012</option>
+        <option value="601013">大模型 601013</option>
+        <option value="601014">大模型 601014</option>
+        <option value="601015">大模型 601015</option>
+        <option value="601001">大模型 601001（智兰）</option>
+      </optgroup>
+      <optgroup label="精品音色">
+        <option value="101001">智瑜 · 女声甜美</option>
+        <option value="101002">智聆 · 女声通用</option>
+        <option value="101004">智云 · 男声通用</option>
+        <option value="101003">智美 · 女声客服</option>
+        <option value="101006">智言 · 女声温柔</option>
+        <option value="101010">智华 · 男声稳重</option>
+        <option value="101013">智辉 · 男声浑厚</option>
+        <option value="101011">智燕 · 女声亲切</option>
+        <option value="101019">智彤 · 女声知性</option>
+        <option value="101007">智娜 · 女声客服</option>
+        <option value="101008">智琪 · 女声客服</option>
+        <option value="101016">智甜 · 女童声</option>
+        <option value="101015">智萌 · 男童声</option>
+        <option value="101017">智蓉 · 女声情感</option>
+        <option value="101018">智靖 · 男声情感</option>
+        <option value="101014">智宁 · 男声播报</option>
+      </optgroup>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="actions">
+      <button class="secondary" id="preview_voice" type="button">试听</button>
+      <span class="msg" id="voice_preview_status"></span>
+    </div>
+    <div class="hint">状态:<span id="voice_status">…</span>。选择后点击页面底部“保存此页”立即生效。</div>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="connections" hidden>
+  <div class="card">
+    <h2>微信 ClawBot</h2>
+    <div class="hint">微信官方 ClawBot/iLink 私聊通道。有云端连接时由云端接收消息，本机在线连接后可执行桌面任务；没有云端连接时由本机接收并执行。首次登录后仅允许白名单中的用户遥控小A。</div>
+    <div class="connection-status" aria-label="微信连接状态">
+      <div class="connection-status-item"><span>接收位置</span><strong id="channel_runtime_mode">正在读取…</strong></div>
+      <div class="connection-status-item"><span>连接状态</span><strong id="weixin_status">正在读取…</strong></div>
+    </div>
+    <div class="actions">
+      <button class="save" id="weixin_login" type="button">扫码连接</button>
+      <button class="secondary" id="weixin_logout" type="button">解绑全部账号</button>
+      <span class="msg" id="weixin_feedback" role="status" aria-live="polite"></span>
+    </div>
+
+    <div class="actions" id="weixin_qr_panel" hidden>
+      <img id="weixin_qr" alt="微信 ClawBot 登录二维码" width="220" height="220" />
+      <span class="hint">请使用微信扫码，并在手机上确认登录。</span>
+    </div>
+    <div class="inline-info">再次扫码可添加账号，已连接账号会保留；扫码成功后自动授权。</div>
+    <div class="channel-section-heading"><strong>已连接账号 · 已授权用户</strong><span class="hint" id="weixin_account_count"></span></div>
+    <div id="weixin_accounts_list" class="channel-account-list" aria-label="已连接微信账号"></div>
+    <div class="hint">扫码连接即完成授权。每个账号单独控制远程权限：开启后该账号可操作本机和云端，关闭后该账号仅聊天及管理自己的记忆；备注按账号保存。</div>
+    <div class="msg err channel-lock-hint" id="channel_remote_lock_hint" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <div class="card">
+    <h2>飞书</h2>
+    <div class="hint">有云端连接时由云端接收消息，本机在线连接后可执行桌面任务；没有云端连接时由本机接收并执行。已授权用户可私聊小A，回答问题并接收结果；电脑操作由各用户的远程权限决定。</div>
+    <label>App ID</label>
+    <input id="fs_app_id" placeholder="cli_..." />
+    <label>App Secret</label>
+    <input id="fs_app_secret" type="password" placeholder="留空则保留已保存的密钥" autocomplete="new-password" />
+    <div class="channel-section-heading"><strong>已授权用户</strong><span class="hint" id="feishu_account_count"></span></div>
+    <div id="feishu_authorized_list" class="channel-account-list" aria-label="已授权飞书用户"></div>
+    <div class="hint">添加用户：让对方先私聊机器人，再点击下方对应的“授权此用户”。多人可分别授权，完成后会出现在上方列表，无需复制或填写 ID。</div>
+    <div class="inline-info" id="feishu_pending_panel" hidden>
+      <strong>待授权用户</strong>
+      <div id="feishu_pending_list" class="connection-status" aria-label="待授权飞书用户"></div>
+      <button id="authorize_recent_feishu" class="secondary" type="button" hidden>授权最近私聊用户</button>
+    </div>
+    <div class="msg err" id="feishu_pending_status" role="status" aria-live="polite" hidden></div>
+    <div class="hint">飞书可接收私聊文字和语音；群聊默认忽略。待授权用户暂时没出现时，请让对方重新私聊机器人，列表会自动刷新。</div>
+    <div class="hint">连接状态：<span id="fs_status">…</span>。需在飞书开放平台创建自建应用、开启 im 权限并将事件订阅设为“长连接”。</div>
+    <div class="actions">
+      <button class="save" id="save_feishu" type="button">保存飞书</button>
+      <button class="secondary" id="feishu_logout" type="button">解绑全部账号</button>
+      <span class="msg" id="feishu_save_status" role="status" aria-live="polite"></span>
+    </div>
+    <div class="hint">每个授权的飞书用户单独控制远程权限：开启后该用户可操作本机和云端，关闭后该用户仅聊天。新授权用户默认关闭；备注会按 Open ID 保存，点击用户行内开关立即同步本机与云端。</div>
+  </div>
+
+  <div class="card" id="project_libraries_card">
+    <h2>项目共享记忆库</h2>
+    <p class="hint">微信与飞书共用项目资料，按真实账号分别授权，不按同名备注关联。只有管理员可以维护资料，已授权成员只能查询。</p>
+    <details>
+        <summary>管理项目、调用名称与账号权限</summary>
+        <p class="hint" id="weixin_shared_help">首次以调用名称开头即可进入项目对话，保持时间内后续消息自动沿用该项目。微信和飞书账号分别授权。</p>
+        <label for="weixin_library_select">项目共享库</label>
+        <select id="weixin_library_select" aria-describedby="weixin_shared_status"></select>
+        <button type="button" class="secondary" id="weixin_library_new">新建项目共享库</button>
+        <label for="weixin_library_title">项目库名称</label>
+        <input id="weixin_library_title" maxlength="80" placeholder="例如：厂房项目资料" />
+        <label for="weixin_shared_name">调用名称</label>
+        <input id="weixin_shared_name" minlength="2" maxlength="30" placeholder="例如：厂房资料" aria-describedby="weixin_shared_status" />
+        <label for="weixin_shared_ttl">项目对话保持时间（分钟）</label>
+        <input id="weixin_shared_ttl" type="number" min="5" max="240" step="1" value="30" aria-describedby="weixin_shared_ttl_hint" />
+        <p class="hint" id="weixin_shared_ttl_hint">默认 30 分钟，可设 5～240 分钟。从发送调用名称时起算，再次发送调用名称会重新计时；期间可直接追问。</p>
+        <label for="weixin_memory_owner">本库管理员（可以查询、保存、修改、删除资料）</label>
+        <select id="weixin_memory_owner" aria-label="选择本库管理员"></select>
+        <p class="hint" id="weixin_memory_owner_status">管理员解绑后不会自动转交权限。</p>
+        <fieldset>
+          <legend>允许访问本库的账号（管理员默认可访问，其他账号只读）</legend>
+          <div id="weixin_library_members"></div>
+        </fieldset>
+        <div class="actions project-library-actions">
+          <button type="button" class="secondary" id="weixin_shared_save">保存本库设置</button>
+          <button type="button" class="secondary msg err" id="weixin_shared_delete">删除当前项目库</button>
+          <button type="button" class="secondary" id="weixin_library_backup">备份全部项目库到本机</button>
+        </div>
+        <p class="hint">自动同步不下载项目资料。此全量备份仅供受信任的管理电脑，云端需本机已连接专用 SSH 密钥；备份不自动恢复或合并。</p>
+        <p class="hint" id="weixin_shared_status" role="status" aria-live="polite">新库默认仅管理员可访问，其他账号需要明确勾选授权。</p>
+    </details>
+  </div>
+  <div class="card" data-local-desktop-only>
+    <h2>云端连接</h2>
+    <label for="cloud_host">公网 IP 地址</label>
+    <input id="cloud_host" inputmode="url" placeholder="例如 203.0.113.10" autocomplete="off" />
+    <label for="cloud_username">远程用户名</label>
+    <input id="cloud_username" value="root" autocomplete="username" />
+    <label for="cloud_password">远程密码（SSH）</label>
+    <input id="cloud_password" type="password" autocomplete="off" />
+    <div class="hint">首次部署请填写密码，安装专用 SSH 密钥后不保存密码；后续同一服务器可留空。部署/更新使用当前小A内置的云端文件，并保留配置和数据；安装最新云端版本前，请先更新本机小A。</div>
+    <label for="worker_id">这台电脑的名称</label>
+    <input id="worker_id" placeholder="例如 pingge-pc" maxlength="100" />
+    <div class="actions">
+      <button class="secondary" id="connect_cloud" type="button">部署 / 更新云端</button>
+      <span class="msg" id="cloud_deploy_status" role="status" aria-live="polite"></span>
+    </div>
+    <div class="cloud-progress-panel" aria-label="云端部署进度">
+      <div class="hint"><span id="cloud_job_target">尚未开始部署</span> <span class="msg err" id="cloud_new_version" role="status" aria-live="polite" hidden></span></div>
+      <ol class="cloud-steps" id="cloud_steps">
+        <li id="cloud_step_0" data-state="pending"><span aria-hidden="true">○</span><span>1. 检查服务器 · 未开始</span></li>
+        <li id="cloud_step_1" data-state="pending"><span aria-hidden="true">○</span><span>2. 上传安装文件 · 未开始</span></li>
+        <li id="cloud_step_2" data-state="pending"><span aria-hidden="true">○</span><span>3. 安装运行环境 · 未开始</span></li>
+        <li id="cloud_step_3" data-state="pending"><span aria-hidden="true">○</span><span>4. 更新配置与启动服务 · 未开始</span></li>
+        <li id="cloud_step_4" data-state="pending"><span aria-hidden="true">○</span><span>5. 检查云端服务 · 未开始</span></li>
+        <li id="cloud_step_5" data-state="pending"><span aria-hidden="true">○</span><span>6. 连接本机 worker · 未开始</span></li>
+      </ol>
+      <progress id="cloud_overall_progress" value="0" max="6" aria-label="已完成的部署步骤"></progress>
+      <div class="hint" id="cloud_step_progress">已完成 0/6 步；不会按时间模拟百分比</div>
+      <div id="cloud_upload_row" hidden><label for="cloud_upload_progress">安装包上传进度</label><progress id="cloud_upload_progress" value="0" max="100"></progress></div>
+      <div class="actions"><button class="secondary" type="button" id="cloud_retry_worker" hidden>重试连接本机</button></div>
+      <details><summary>查看详细日志</summary><pre id="cloud_deploy_logs" data-i18n-empty="true">尚无部署日志</pre></details>
+      <div class="hint" id="cloud_last_result">尚无部署记录</div>
+    </div>
+    <section class="cloud-maintenance" aria-labelledby="cloud-maintenance-title">
+      <h3 id="cloud-maintenance-title">高级维护</h3>
+      <div class="hint">修复/重装保留配置、数据、证书和凭据。IP 网页证书验证需要公网 80 端口可达，并自动配置续期。卸载会移除小A自己的网页入口和续期任务，保留 Nginx、系统 Python、SSH 和其他网站。</div>
+      <div class="actions">
+        <button class="secondary" type="button" id="cloud_check">检查云端状态</button>
+        <button class="secondary" type="button" id="cloud_repair">修复 / 重装（保留数据）</button>
+        <button class="secondary" type="button" id="cloud_uninstall">卸载云端小A</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="cloud_purge" /> 卸载时彻底删除云端小A数据（不可恢复，需额外确认）</label>
+    </section>
+    <div class="msg" id="connection_preview" role="status" aria-live="polite"></div>
+    <div class="hint">连接成功后会自动完成并保存连接所需的安全配置；以后启动小A会自动连接。</div>
+    <div class="hint">云端连接默认使用 TCP 8443端口。部署会自动配置服务器系统防火墙；还需在云服务商安全组放行 TCP 8443。如部署显示其他端口，请按显示端口放行。</div>
+    <div class="hint">电脑关机时，飞书消息仍由服务器上的 hub 独立处理；需要操作电脑的任务等 worker 开机后再执行。部署期间可关闭设置页，但请勿退出小A或关闭电脑；中断后会保留记录，请先检查云端状态。云端支持 Debian/Ubuntu + systemd，远程账号须为 root 或具有免密 sudo。</div>
+  </div>
+  </section>
+
+  <section class="settings-page" data-page="system" hidden>
+  <div class="card" id="release_update_card" data-local-desktop-only>
+    <h2>版本与更新</h2>
+    <div class="inline-info">当前版本：<code id="update_current_version">读取中…</code>　最新版本：<code id="update_latest_version">尚未检查</code></div>
+    <div class="hint" id="update_release_notes">便携版更新通过 GitHub Releases 发布；云端使用本机内置文件，更新云端前请先更新本机小A。开发版不会替换源码目录。</div>
+    <div class="actions">
+      <button class="secondary" id="check_update" type="button">检查更新</button>
+      <button class="secondary" id="update_local" type="button" hidden>更新本地小A</button>
+      <button class="secondary" id="restart_update" type="button" hidden>立即重启更新</button>
+      <button class="secondary" id="cancel_update" type="button" hidden>取消更新</button>
+      <span class="msg" id="update_status" role="status" aria-live="polite"></span>
+    </div>
+    <progress id="update_progress" value="0" max="100" hidden aria-label="本地更新下载进度"></progress>
+  </div>
+  <div class="card" data-local-desktop-only>
+    <h2>开机自启</h2>
+    <label class="check-row"><input type="checkbox" id="open_at_login" /> 开机后自动启动小A</label>
+    <div class="hint" id="open_at_login_status">正在读取状态…</div>
+    <div class="msg err" id="open_at_login_auth_warning" hidden>
+      当前监听地址对外开放但未设置网页密码；开机时后端会拒绝启动。请先设置下方网页访问密码。
+    </div>
+    <div class="hint">启动后会正常显示悬浮球。移动便携版 EXE 后，手动运行新位置一次即可自动更新启动项。</div>
+  </div>
+  <div class="card">
+    <h2>隔离工作区</h2>
+    <div class="hint">所有任务成品、脚本和过程文件默认集中放在这里。工作区文件、安全备份、记忆、聊天记录、配置和浏览器登录数据不会被自动删除。</div>
+    <label for="isolation_max_mb">自动清理上限(MB)</label>
+    <input id="isolation_max_mb" type="number" min="128" max="10240" step="1" />
+    <div class="inline-info">路径:<code id="isolation_path">读取中…</code></div>
+    <div class="inline-info">当前占用:<span id="isolation_usage">读取中…</span></div>
+    <div class="hint">超过上限时只清理临时文件和日志，按修改时间从旧到新处理；工作区成品和安全备份始终保留，因此总占用可能超过上限。默认上限为 1024 MB。</div>
+  </div>
+  <div class="card">
+    <h2>网页访问密码</h2>
+    <div class="hint">云端网页地址：<span id="cloud_web_empty">读取中…</span><code id="cloud_web_url" hidden></code></div>
+    <div class="actions"><button id="copy_cloud_web_url" class="secondary" type="button" hidden>复制地址</button><span class="msg" id="cloud_web_copy_status" role="status" aria-live="polite"></span></div>
+    <div class="hint">地址自动使用已绑定服务器和部署后实际分配的端口；已绑定云端时，在此填写密码并保存会同步到云端，留空不修改。填 - 会关闭远程网页访问。</div>
+    <label for="web_password">密码</label>
+    <input id="web_password" type="password" placeholder="留空则不修改;填一个减号 - 表示取消密码" />
+    <div class="hint">状态:<span id="auth_status">…</span>。
+      本机自己用可以不设。<b>未设置密码时，远程网页访问关闭</b>；设置密码后需登录才能访问。
+      改密码后所有已登录的会话都会失效,需重新登录。</div>
+  </div>
+  <div class="card">
+    <h2>远程遥控锁定</h2>
+    <div class="hint">在飞书或微信发一句「锁定」可紧急冻结所有远程操作(手机丢了或号被盗时止损)。
+      出于安全,解锁只能在本机这里做——盗号者在飞书或微信发「解锁」是无效的。</div>
+    <div class="inline-info" style="margin-top:8px">状态:<span id="channel_lock_status">查询中…</span></div>
+    <div class="actions">
+      <button id="channel_unlock_btn" type="button" hidden>解除锁定</button>
+      <span class="msg" id="channel_unlock_msg" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+  <div class="card" id="system_computer_control" data-local-desktop-only>
+    <h2>电脑控制</h2>
+    <div class="inline-info"><span class="extension-state">后台优先</span><span>不激活窗口、不移动鼠标</span></div>
+    <div class="hint">后台接口不可用时，小A会等待你停止键鼠操作，再短暂取得前台控制；你正在操作时不会抢鼠标。</div>
+  </div>
+  <div class="card" data-local-desktop-only>
+    <h2>电脑操作记录</h2>
+    <div class="audit-toolbar">
+      <div><label for="audit_category">类型</label><select id="audit_category">
+        <option value="">全部</option><option value="computer">电脑与窗口</option>
+        <option value="office">文件与 Office</option><option value="code">代码工作台</option>
+        <option value="messages">消息与发送</option><option value="system">系统命令</option>
+      </select></div>
+      <div><label for="audit_status">结果</label><select id="audit_status">
+        <option value="">全部</option><option value="ok">成功</option>
+        <option value="failed">失败</option><option value="rejected">已拒绝</option>
+      </select></div>
+      <button class="secondary" id="refresh_audit" type="button">刷新</button>
+      <button class="secondary" id="export_audit" type="button">导出</button>
+    </div>
+    <div class="tool-summary" id="audit_summary">正在读取操作记录…</div>
+    <div class="audit-list" id="audit_list"></div>
+    <div class="hint">日志保存于本机并自动脱敏；默认保留 90 天，最多 50,000 条。</div>
+  </div>
+  </section>
+
+  <div class="actions" id="page_save_actions">
+    <button class="save" id="save">保存此页</button>
+    <span class="msg" id="msg"></span>
+  </div>
+  </main>
+  </div>
+
+  <script src="./ui-language.js"></script>
+  <script>
+    const IS_LOCAL_FILE = location.protocol === "file:" || !location.host;
+    const HOST = IS_LOCAL_FILE ? "127.0.0.1:1985" : location.host;
+    const API = (IS_LOCAL_FILE ? "http:" : location.protocol) + "//" + HOST;
+    const $ = (id) => document.getElementById(id);
+
+    const settingsDialog = $("settingsDialog");
+    const settingsDialogForm = $("settingsDialogForm");
+    const settingsDialogTitle = $("settingsDialogTitle");
+    const settingsDialogMessage = $("settingsDialogMessage");
+    const settingsDialogLabel = $("settingsDialogLabel");
+    const settingsDialogInput = $("settingsDialogInput");
+    const settingsDialogCancel = $("settingsDialogCancel");
+    const settingsDialogConfirm = $("settingsDialogConfirm");
+    let settingsDialogResolver = null;
+    let settingsDialogInputMode = false;
+
+    function finishSettingsDialog(value) {
+      const resolve = settingsDialogResolver;
+      settingsDialogResolver = null;
+      if (settingsDialog.open) settingsDialog.close();
+      if (resolve) resolve(value);
+    }
+
+    function showSettingsDialog({title = "确认操作", message = "", input = false, inputType = "text",
+      inputLabel = "输入内容", inputPlaceholder = "", confirmLabel = "确定", danger = false} = {}) {
+      if (settingsDialog.open) finishSettingsDialog(null);
+      return new Promise(resolve => {
+        settingsDialogResolver = resolve;
+        settingsDialogInputMode = input;
+        settingsDialogTitle.textContent = title;
+        settingsDialogMessage.textContent = message;
+        settingsDialogLabel.textContent = inputLabel;
+        settingsDialogLabel.hidden = !input;
+        settingsDialogInput.hidden = !input;
+        settingsDialogInput.type = inputType;
+        settingsDialogInput.placeholder = inputPlaceholder;
+        settingsDialogInput.value = "";
+        settingsDialogConfirm.textContent = confirmLabel;
+        settingsDialog.classList.toggle("danger", danger);
+        settingsDialog.showModal();
+        queueMicrotask(() => (input ? settingsDialogInput : settingsDialogConfirm).focus());
+      });
+    }
+
+    function closeSettingsDialogFromCancel() {
+      finishSettingsDialog(settingsDialogInputMode ? null : false);
+    }
+    settingsDialogForm.addEventListener("submit", event => {
+      event.preventDefault();
+      finishSettingsDialog(settingsDialogInputMode ? settingsDialogInput.value : true);
+    });
+    settingsDialogCancel.addEventListener("click", closeSettingsDialogFromCancel);
+    settingsDialog.addEventListener("cancel", event => {
+      event.preventDefault();
+      closeSettingsDialogFromCancel();
+    });
+    settingsDialog.addEventListener("click", event => {
+      if (event.target === settingsDialog) closeSettingsDialogFromCancel();
+    });
+
+    function settingsConfirm(message, options = {}) {
+      return showSettingsDialog({...options, message, input: false});
+    }
+    function settingsPrompt(message, options = {}) {
+      return showSettingsDialog({...options, message, input: true});
+    }
+
+    function setSettingsTheme(theme) {
+      document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+    }
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === "xiaoa-theme") setSettingsTheme(event.data.theme);
+    });
+
+    let providerSeq = 0;
+    let currentPage = "models";
+    let previewAudio = null;
+    let envManagedFields = {};
+    let cloudRuntimeAvailable = false;
+    let runtimeIsHub = false;
+    let scheduleCloudSelected = false;
+    let feishuInitialAppId = "";
+    let settingsLoaded = false;
+    let desktopPackaged = false;
+    let localAppVersion = "", latestRelease = null;
+    let refreshingChannelLock = false;
+    let voiceCfg = null;
+    let updatePollTimer = null;
+    let updatePollStartedAt = 0;
+    const UPDATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+    const PAGE_META = {
+      models: ["模型服务", "管理模型厂商、接口和可选模型。"],
+      voice: ["语音与对话", "管理语音识别、合成和音色。"],
+      memory: ["记忆与备份", "管理本地记忆的定时备份。"],
+      schedule: ["定时任务", "管理到点提醒和定时执行的任务。"],
+      connections: ["消息连接", "管理微信 ClawBot 与飞书消息渠道。"],
+      capabilities: ["能力与扩展", "查看小A内置工具，安装和管理扩展。"],
+      system: ["电脑与安全", "管理本机控制和访问安全。"],
+    };
+
+    function selectPage(page) {
+      currentPage = PAGE_META[page] ? page : "models";
+      document.querySelectorAll(".settings-page").forEach(section => {
+        section.hidden = section.dataset.page !== currentPage;
+      });
+      document.querySelectorAll("[data-page-target]").forEach(button => {
+        button.classList.toggle("active", button.dataset.pageTarget === currentPage);
+        button.setAttribute("aria-current", button.dataset.pageTarget === currentPage ? "page" : "false");
+      });
+      $("page_title").textContent = PAGE_META[currentPage][0];
+      $("page_subtitle").textContent = PAGE_META[currentPage][1] + " 每个页面独立保存。";
+      const saveActions = $("page_save_actions");
+      if (currentPage === "system") {
+        const computerControl = $("system_computer_control");
+        computerControl.parentNode.insertBefore(saveActions, computerControl);
+      } else {
+        document.querySelector(".settings-main").appendChild(saveActions);
+      }
+      saveActions.hidden = ["connections", "capabilities", "schedule"].includes(currentPage);
+      $("msg").textContent = "";
+      if (currentPage === "system") {
+        loadChannelLock().catch(() => {});
+      }
+      if (currentPage === "connections") {
+        if (settingsLoaded) loadChannels().catch(() => {});
+      }
+      if (currentPage === "schedule") {
+        loadSchedule().catch(() => {});
+      }
+      if (["system", "connections"].includes(currentPage) && settingsLoaded) {
+        loadReleaseInfo().catch(() => {});
+      }
+    }
+
+    document.querySelectorAll("[data-page-target]").forEach(button => {
+      button.onclick = () => { location.hash = button.dataset.pageTarget; selectPage(button.dataset.pageTarget); };
+    });
+    window.addEventListener("hashchange", () => selectPage(location.hash.slice(1)));
+
+    function channelTarget() {
+      return cloudRuntimeAvailable ? "cloud" : "local";
+    }
+
+    async function loadChannels() {
+      $("channel_runtime_mode").textContent = runtimeIsHub
+        ? "云端接收；本机在线时可操作电脑"
+        : cloudRuntimeAvailable ? "云端接收；本机在线时可操作电脑" : "本机接收与操作（需保持小A运行）";
+      await Promise.all([loadWeixin(), loadFeishu(), loadProjectLibraries()]);
+      await loadRemoteControls();
+    }
+
+    let remoteControlState = null;
+
+    function controlValue(side, source, identity, index) {
+      const accounts = side?.accounts?.[source] || {};
+      if (Object.prototype.hasOwnProperty.call(accounts, identity)) return accounts[identity];
+      // Account rows use independent permissions. A newly scanned account must
+      // stay off until its own record has been read or explicitly enabled.
+      return false;
+    }
+
+    function accountControlState(source, identity, index) {
+      if (!remoteControlState) return "unknown";
+      const local = controlValue(remoteControlState.local, source, identity, index);
+      const cloud = remoteControlState.cloud
+        ? controlValue(remoteControlState.cloud, source, identity, index) : local;
+      return local === cloud ? (local ? "on" : "off") : "mixed";
+    }
+
+    function showRemoteControl(button, state) {
+      button.dataset.controlState = state;
+      button.setAttribute("aria-checked", String(state === "on"));
+      const labels = {on: "开启", off: "关闭（仅聊天）", mixed: "两端不同步", unknown: "状态未知"};
+      button.className = "channel-remote-toggle";
+      button.innerHTML = `<span class="channel-toggle-dot" aria-hidden="true"></span>`;
+      button.title = `远程操控：${labels[state]}`;
+      button.setAttribute("aria-label", `远程操控：${labels[state]}`);
+      button.disabled = !remoteControlState;
+    }
+
+    function refreshAccountRemoteControls() {
+      document.querySelectorAll("[data-channel-remote-toggle]").forEach(button => {
+        showRemoteControl(button, accountControlState(
+          button.dataset.channelSource, button.dataset.channelIdentity, Number(button.dataset.channelIndex),
+        ));
+      });
+    }
+
+    function createRemoteControlButton(source, identity, index) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "switch");
+      button.setAttribute("aria-label", "远程操控开关");
+      button.dataset.channelRemoteToggle = "true";
+      button.dataset.channelSource = source;
+      button.dataset.channelIdentity = identity;
+      button.dataset.channelIndex = String(index);
+      button.onclick = () => toggleRemoteControl(source, identity, index, button);
+      showRemoteControl(button, accountControlState(source, identity, index));
+      return button;
+    }
+
+    function applyRemoteControls(result) {
+      remoteControlState = result;
+      refreshAccountRemoteControls();
+    }
+
+    async function loadRemoteControls() {
+      try {
+        const response = await fetch(API + "/api/channel/control");
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+        applyRemoteControls(result);
+      } catch (error) {
+        remoteControlState = null;
+        refreshAccountRemoteControls();
+        $("weixin_feedback").textContent = "远程开关状态读取失败：" + error.message;
+      }
+      await loadChannelRemoteHint();
+    }
+
+    async function loadChannelRemoteHint() {
+      const hint = $("channel_remote_lock_hint");
+      if (!hint) return;
+      try {
+        const response = await fetch(API + "/api/channel/status");
+        const result = await response.json();
+        hint.hidden = result.locked !== true;
+        if (result.locked === true) {
+          hint.textContent = "当前仍处于“远程遥控锁定”状态，所有账号即使开关开启也只能聊天。请在本机小A的“电脑与安全”页解除锁定。";
+        }
+      } catch (_) {
+        hint.hidden = true;
+      }
+    }
+
+    async function toggleRemoteControl(source, identity, index, button) {
+      const state = accountControlState(source, identity, index);
+      // 状态不一致或未知时只允许先关闭，不能盲目扩大权限。
+      const enabled = state === "off";
+      if (state === "unknown" || state === "mixed") {
+        if (!await settingsConfirm("本机与云端状态不一致，将先关闭这个身份的远程操控。确定继续？", {title: "同步远程操控", danger: true})) return;
+      } else if (enabled && !await settingsConfirm("开启后，这个账号可通过此渠道操作本机和云端；危险操作仍需授权。确定开启？", {title: "开启远程操控", danger: true})) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        const response = await fetch(API + "/api/channel/control", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({source, identity, enabled}),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+        }
+        applyRemoteControls(result);
+        button.title = result.message || "已保存";
+      } catch (error) {
+        button.title = "未确认保存成功：" + error.message;
+      } finally {
+        showRemoteControl(button, accountControlState(source, identity, index));
+        button.removeAttribute("aria-busy");
+      }
+    }
+
+    let feishuAllowedIds = [];
+    const channelRemarks = {weixin: {}, feishu: {}};
+    let sharedMemorySettings = {call_name: "共享记忆库", enabled: true};
+    let sharedLibraries = [], sharedLibraryAccounts = [], sharedLibrariesSupported = false;
+    async function saveAccountRemark(source, identity, value, input) {
+      const cloud = channelTarget() === "cloud";
+      const path = source === "weixin"
+        ? `${cloud ? "/api/cloud/weixin" : "/api/weixin"}/accounts/${encodeURIComponent(identity)}/remark`
+        : `${cloud ? "/api/cloud/feishu" : "/api/feishu"}/users/${encodeURIComponent(identity)}/remark`;
+      input.disabled = true;
+      try {
+        const response = await fetch(API + path, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({remark: value.trim()}),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+        channelRemarks[source][identity] = value.trim();
+        input.title = value.trim() || "添加备注";
+      } catch (error) {
+        input.title = "备注保存失败：" + error.message;
+      } finally { input.disabled = false; }
+    }
+    function createAccountRemarkInput(source, identity) {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "channel-account-remark";
+      input.maxLength = 80;
+      input.placeholder = "备注（如：张三）";
+      input.setAttribute("aria-label", "账号备注");
+      input.value = channelRemarks[source]?.[identity] || "";
+      input.title = input.value || "添加备注";
+      input.onchange = () => saveAccountRemark(source, identity, input.value, input);
+      return input;
+    }
+    function renderAuthorizedIds(containerId, ids, remove, channelSource = "") {
+      const container = $(containerId);
+      container.classList.toggle("channel-account-list", Boolean(channelSource));
+      if (channelSource === "feishu") {
+        $("feishu_account_count").textContent = ids.length ? `${ids.length} 个` : "暂未授权";
+      }
+      container.textContent = "";
+      if (!ids.length) { container.textContent = "尚未授权用户"; return; }
+      for (const [index, id] of ids.entries()) {
+        const item = document.createElement("div");
+        if (!channelSource) {
+          item.className = "authorized-id-row";
+          const label = document.createElement("code");
+          label.textContent = maskIdentifier(id); label.title = id;
+          const copy = document.createElement("button");
+          copy.type = "button"; copy.className = "secondary"; copy.textContent = "复制";
+          copy.onclick = () => navigator.clipboard.writeText(id);
+          const revoke = document.createElement("button");
+          revoke.type = "button"; revoke.className = "secondary"; revoke.textContent = "撤销";
+          revoke.onclick = () => remove(id);
+          item.append(label, copy, revoke); container.append(item);
+          continue;
+        }
+
+        item.className = "channel-account-row";
+        const number = document.createElement("span");
+        number.className = "channel-account-index";
+        number.textContent = `${index + 1}.`;
+        const identity = document.createElement("div");
+        identity.className = "channel-account-identity";
+        const copy = document.createElement("div");
+        copy.className = "channel-account-copy";
+        const label = document.createElement("code");
+        label.className = "channel-account-id";
+        label.textContent = maskIdentifier(id); label.title = id;
+        const state = document.createElement("strong");
+        state.className = "channel-account-state";
+        state.textContent = "已授权";
+        copy.append(label, state);
+        identity.append(number, copy);
+
+        const remark = createAccountRemarkInput(channelSource, id);
+        const remote = createRemoteControlButton(channelSource, id, index);
+        const remoteWrap = document.createElement("div");
+        remoteWrap.className = "channel-account-remote";
+        const remoteLabel = document.createElement("span");
+        remoteLabel.textContent = "远程操控";
+        remoteWrap.append(remoteLabel, remote);
+        const revoke = document.createElement("button");
+        revoke.type = "button"; revoke.className = "secondary channel-account-remove"; revoke.textContent = "解绑";
+        revoke.onclick = () => remove(id);
+        const actions = document.createElement("div");
+        actions.className = "channel-account-actions";
+        actions.append(remoteWrap, revoke);
+        item.append(identity, remark, actions); container.append(item);
+      }
+    }
+
+    function libraryIdentity(item) {
+      return item.identity;
+    }
+    function libraryAccountLabel(item, index, english = false) {
+      return `${item.source === "feishu" ? (english ? "Feishu" : "飞书") : (english ? "WeChat" : "微信")} ${item.number || index + 1} · ${item.remark || (english ? "No remark" : "未备注")} · ${maskIdentifier(item.user_id)}`;
+    }
+    function renderSharedMemorySettings(settings = {}) {
+      sharedMemorySettings = {id: "", name: "", call_name: "", enabled: true, members: [], context_ttl_minutes: 30, ...settings};
+      const selected = sharedMemorySettings;
+      $("weixin_library_title").value = selected.name;
+      $("weixin_shared_name").value = selected.call_name;
+      $("weixin_shared_ttl").value = selected.context_ttl_minutes;
+      const disabled = !sharedLibrariesSupported || !selected.enabled;
+      $("weixin_shared_save").disabled = disabled;
+      $("weixin_shared_delete").disabled = disabled || !selected.id;
+      $("weixin_library_backup").disabled = !sharedLibrariesSupported;
+      $("weixin_library_new").disabled = !sharedLibrariesSupported;
+      $("weixin_library_select").disabled = !sharedLibrariesSupported;
+      $("weixin_library_title").disabled = $("weixin_shared_name").disabled = $("weixin_shared_ttl").disabled = disabled;
+      $("weixin_shared_save").textContent = selected.id ? "保存本库设置" : "创建项目共享库";
+      $("weixin_shared_help").textContent = "以调用名称开头即可自然聊天，无需空格或“查询：”。有效时间内可直接追问，再次发送名称会重新计时；有远程操控权限不代表有项目资料权限。";
+      $("weixin_shared_status").textContent = !sharedLibrariesSupported
+        ? "当前服务版本不支持多项目共享库，请先部署 / 更新云端；未修改现有资料。"
+        : !selected.enabled ? "此库已删除并停用，不能恢复旧权限；可新建空库并重新授权。已有备份需单独管理。"
+        : selected.id ? `本库 ${selected.count || 0} 条资料，项目对话保持 ${selected.context_ttl_minutes} 分钟。示例：${selected.call_name}，帮我看看这个项目的工期。`
+        : "新库默认仅管理员可访问。请填写名称、调用名称并选择管理员，按需勾选查询账号。";
+      const owner = $("weixin_memory_owner");
+      owner.textContent = "";
+      const blank = document.createElement("option");
+      blank.value = ""; blank.textContent = "请选择已授权的微信或飞书管理员"; owner.append(blank);
+      sharedLibraryAccounts.forEach((item, index) => {
+        const option = document.createElement("option");
+        option.dataset.i18nEn = libraryAccountLabel(item, index, true);
+        option.value = libraryIdentity(item); option.textContent = libraryAccountLabel(item, index);
+        option.selected = libraryIdentity(item) === selected.owner;
+        owner.append(option);
+      });
+      owner.value = sharedLibraryAccounts.some(item => libraryIdentity(item) === selected.owner) ? selected.owner : "";
+      owner.disabled = disabled;
+      $("weixin_memory_owner_status").textContent = selected.owner && !sharedLibraryAccounts.some(item => libraryIdentity(item) === selected.owner)
+        ? "本库管理员未连接，身份和权限保留；修改设置时请明确选择管理员。"
+        : "管理员只管理当前项目库，不自动获得其他项目的访问权限；权限更改保存后生效。";
+      const members = $("weixin_library_members");
+      const readerIds = new Set(selected.members.filter(x => x.permission === "query").map(x => x.identity));
+      function checkbox(value, text, offline = false, english = text) {
+        const isOwner = value === (owner.value || selected.owner);
+        const label = document.createElement("label"); label.className = "check-row";
+        const input = document.createElement("input"); input.type = "checkbox";
+        input.value = value; input.checked = isOwner || readerIds.has(value); input.disabled = disabled || isOwner;
+        input.dataset.offline = offline ? "true" : "false";
+        input.onchange = () => { if (input.checked) readerIds.add(value); else readerIds.delete(value); };
+        const caption = document.createElement("span");
+        caption.textContent = " " + text + (isOwner ? "（管理员，默认可访问）" : "");
+        caption.dataset.i18nEn = " " + english + (isOwner ? " (administrator; access granted by default)" : "");
+        label.append(input, caption); members.append(label);
+      }
+      function renderMembers() {
+        members.textContent = "";
+        sharedLibraryAccounts.forEach((item, index) => checkbox(libraryIdentity(item), libraryAccountLabel(item, index), false, libraryAccountLabel(item, index, true)));
+        const connected = new Set(sharedLibraryAccounts.map(libraryIdentity));
+        for (const member of selected.members) {
+          if (!connected.has(member.identity)) checkbox(member.identity,
+            `未连接/旧应用账号 · ${maskIdentifier(member.identity)}` +
+            (member.identity === (owner.value || selected.owner) ? "" : "（取消勾选可撤销其查询权限）"), true,
+            `Disconnected/legacy account · ${maskIdentifier(member.identity)}${member.identity === (owner.value || selected.owner) ? "" : " (uncheck to revoke read-only access)"}`);
+        }
+        if (!members.children.length) members.textContent = "暂无已授权账号，请先连接微信或授权飞书用户。";
+      }
+      owner.onchange = renderMembers;
+      renderMembers();
+    }
+    function renderSharedLibraries(libraries, accounts, preferredName = "") {
+      sharedLibrariesSupported = Array.isArray(libraries);
+      sharedLibraries = sharedLibrariesSupported ? libraries.filter(item => item && item.enabled !== false) : [];
+      sharedLibraryAccounts = accounts;
+      const select = $("weixin_library_select"), previous = select.value;
+      select.textContent = "";
+      for (const item of sharedLibraries) {
+        const option = document.createElement("option"); option.value = item.id;
+        option.textContent = `${item.name} · ${item.call_name}`; option.dataset.noI18n = "";
+        select.append(option);
+      }
+      const selected = sharedLibraries.find(x => x.call_name === preferredName) || sharedLibraries.find(x => x.id === previous) || sharedLibraries[0];
+      select.value = selected ? selected.id : "";
+      renderSharedMemorySettings(selected);
+    }
+    async function changeSharedMemory(remove = false) {
+      if (!sharedLibrariesSupported) return;
+      const selected = sharedMemorySettings, destination = channelTarget();
+      const title = $("weixin_library_title").value.trim(), name = $("weixin_shared_name").value.trim();
+      let payload;
+      if (remove) {
+        if (!selected.id || !selected.enabled) return;
+        const confirmation = await settingsPrompt(`将清除“${selected.name}”中的 ${selected.count || 0} 条共享资料、撤销成员访问并停用本库。其他项目库及私人记忆不受影响。已有备份不会自动删除。请输入完整调用名称“${selected.call_name}”确认：`,
+          {title: "删除当前项目库", inputLabel: "共享库调用名称", confirmLabel: "删除项目库", danger: true});
+        if (confirmation !== selected.call_name) {
+          if (confirmation != null) $("weixin_shared_status").textContent = "名称不一致，未删除项目库。";
+          return;
+        }
+        payload = {action: "delete", id: selected.id, confirmation};
+      } else {
+        if (!title || !/^[\w\u4e00-\u9fff-]{2,30}$/.test(name) || !$("weixin_memory_owner").value) {
+          $("weixin_shared_status").textContent = "请填写项目名称、2～30 字的调用名称，并选择管理员。"; return;
+        }
+        const ttl = Number($("weixin_shared_ttl").value);
+        if (!Number.isInteger(ttl) || ttl < 5 || ttl > 240) {
+          $("weixin_shared_status").textContent = "项目对话保持时间须为 5～240 的整数分钟。";
+          $("weixin_shared_ttl").focus(); return;
+        }
+        const checked = Array.from($("weixin_library_members").querySelectorAll('input:checked'))
+          .filter(x => x.value !== $("weixin_memory_owner").value);
+        payload = {action: "save", id: selected.id, name: title, call_name: name, context_ttl_minutes: ttl,
+          owner_identity: $("weixin_memory_owner").value,
+          reader_identities: checked.filter(x => x.dataset.offline !== "true").map(x => x.value),
+          retained_identities: checked.filter(x => x.dataset.offline === "true").map(x => x.value)};
+      }
+      if (!remove && selected.id && !await settingsConfirm("将保存当前项目库的名称和成员权限；取消授权的账号将立即无法查询本库。确定保存？", {title: "保存项目库权限"})) return;
+      for (const id of ["weixin_shared_save", "weixin_shared_delete", "weixin_library_new", "weixin_library_select"]) $(id).disabled = true;
+      let saved = false;
+      try {
+        const prefix = destination === "cloud" ? "/api/cloud" : "/api";
+        const response = await fetch(API + prefix + "/memory/libraries", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.detail || result.error || "操作失败");
+        saved = true;
+        await loadProjectLibraries(remove ? selected.call_name : name);
+        $("weixin_feedback").textContent = remove ? "当前项目库已删除，其他项目及私人记忆保留" : "项目库设置已保存";
+      } catch (error) {
+        $("weixin_shared_status").textContent = "操作失败：" + error.message;
+      } finally {
+        $("weixin_library_new").disabled = $("weixin_library_select").disabled = !sharedLibrariesSupported;
+        if (!saved) {
+          $("weixin_shared_save").disabled = !sharedLibrariesSupported || !selected.enabled;
+          $("weixin_shared_delete").disabled = !sharedLibrariesSupported || !selected.id || !selected.enabled;
+        }
+      }
+    }
+    $("weixin_library_backup").onclick = async () => {
+      const destination = channelTarget();
+      if (!await settingsConfirm("此操作会把全部项目库及成员权限备份到当前电脑。只应在受信任的管理设备执行；备份可能包含其他项目的敏感资料，撤权和删除不会清除已有备份。确定继续？", {title: "全量项目资料备份", danger: true})) return;
+      const button = $("weixin_library_backup"); button.disabled = true;
+      try {
+        const prefix = destination === "cloud" ? "/api/cloud" : "/api";
+        const response = await fetch(API + prefix + "/memory/libraries/backup", {method: "POST"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.detail || result.error || "备份失败");
+        $("weixin_shared_status").textContent = "全部项目库已备份到：" + result.path;
+      } catch (error) { $("weixin_shared_status").textContent = "备份失败：" + error.message; }
+      finally { button.disabled = !sharedLibrariesSupported; }
+    };
+    $("weixin_shared_save").onclick = () => changeSharedMemory();
+    $("weixin_shared_delete").onclick = () => changeSharedMemory(true);
+    $("weixin_library_select").onchange = () => renderSharedMemorySettings(sharedLibraries.find(x => x.id === $("weixin_library_select").value));
+    $("weixin_library_new").onclick = () => { $("weixin_library_select").value = ""; renderSharedMemorySettings(); $("weixin_library_title").focus(); };
+
+    async function loadProjectLibraries(preferredName = "") {
+      const destination = channelTarget();
+      try {
+        const prefix = destination === "cloud" ? "/api/cloud" : "/api";
+        const response = await fetch(API + prefix + "/memory/libraries");
+        const result = await response.json();
+        if (destination !== channelTarget()) return;
+        if (!response.ok || !result.ok || result.capability !== "cross-channel-v1") {
+          throw new Error(result.detail || result.error || "当前服务不支持微信/飞书项目库，请先更新云端");
+        }
+        renderSharedLibraries(result.libraries, result.accounts || [], preferredName);
+      } catch (error) {
+        if (destination !== channelTarget()) return;
+        renderSharedLibraries(null, []);
+        $("weixin_shared_status").textContent = "项目库读取失败：" + error.message;
+      }
+    }
+
+    async function loadWeixin() {
+      const cloud = channelTarget() === "cloud";
+      const status = $("weixin_status");
+      try {
+        const path = cloud ? "/api/cloud/weixin" : "/api/weixin/status";
+        const response = await fetch(API + path);
+        const account = await response.json();
+        if (!response.ok || account.error) throw new Error(account.detail || account.error || `HTTP ${response.status}`);
+        if (cloud !== (channelTarget() === "cloud")) return;
+        const accounts = account.accounts || [];
+        channelRemarks.weixin = Object.fromEntries(accounts.map(item => [item.account_id, item.remark || ""]));
+        $("weixin_account_count").textContent = accounts.length ? `${accounts.length} 个` : "暂未连接";
+        const accountId = account.ilink_user_id || account.account_id || "";
+        const list = $("weixin_accounts_list");
+        list.textContent = "";
+        if (!accounts.length) list.textContent = "暂未连接微信账号";
+        for (const item of accounts) {
+          const row = document.createElement("div");
+          row.className = "channel-account-row";
+          const number = document.createElement("span");
+          number.className = "channel-account-index";
+          number.textContent = `${accounts.indexOf(item) + 1}.`;
+          const identity = document.createElement("div");
+          identity.className = "channel-account-identity";
+          const copy = document.createElement("div");
+          copy.className = "channel-account-copy";
+          const label = document.createElement("code");
+          label.className = "channel-account-id";
+          label.textContent = maskIdentifier(item.ilink_user_id || item.account_id);
+          label.title = item.ilink_user_id || item.account_id;
+          const state = document.createElement("strong");
+          state.className = "channel-account-state";
+          state.textContent = item.connected ? "已连接" : "未连接";
+          if (item.shared_memory_owner) {
+            state.textContent += " · 管理员";
+            state.title = "共享记忆库管理员：可保存、修改和删除共享资料";
+          }
+          copy.append(label, state);
+          identity.append(number, copy);
+          const remark = createAccountRemarkInput("weixin", item.account_id);
+          const remote = createRemoteControlButton("weixin", item.account_id, accounts.indexOf(item));
+          const remoteWrap = document.createElement("div");
+          remoteWrap.className = "channel-account-remote";
+          const remoteLabel = document.createElement("span");
+          remoteLabel.textContent = "远程操控";
+          remoteWrap.append(remoteLabel, remote);
+          const remove = document.createElement("button");
+          remove.type = "button"; remove.className = "secondary channel-account-remove"; remove.textContent = "解绑";
+          remove.onclick = async () => {
+            if (!await settingsConfirm("确定解绑此微信账号？", {title: "解绑微信账号", danger: true})) return;
+            remove.disabled = true;
+            try {
+              const prefix = cloud ? "/api/cloud/weixin" : "/api/weixin";
+              const response = await fetch(API + `${prefix}/accounts/${encodeURIComponent(item.account_id)}`, {method: "DELETE"});
+              const result = await response.json();
+              if (!response.ok || !result.ok) throw new Error(result.error || "解绑失败");
+              $("weixin_feedback").textContent = "此账号已解绑";
+              await loadWeixin(); await loadProjectLibraries();
+            } catch (error) { $("weixin_feedback").textContent = error.message; }
+            finally { remove.disabled = false; }
+          };
+          const actions = document.createElement("div");
+          actions.className = "channel-account-actions";
+          actions.append(remoteWrap, remove);
+          row.append(identity, remark, actions); list.append(row);
+        }
+        $("weixin_login").textContent = accounts.length ? "扫码添加账号" : "扫码连接";
+        status.textContent = account.connected
+          ? (accounts.length > 1 ? "已连接 " + accounts.filter(item => item.connected).length + " 个账号" : "已连接")
+          : (account.error || "未连接");
+      } catch (error) {
+        if (cloud !== (channelTarget() === "cloud")) return;
+        status.textContent = "读取失败：" + error.message;
+      }
+    }
+
+    async function startWeixinLogin() {
+      const cloud = channelTarget() === "cloud";
+      const feedback = $("weixin_feedback");
+      const button = $("weixin_login");
+      const panel = $("weixin_qr_panel");
+      button.disabled = true;
+      feedback.textContent = "正在获取二维码…";
+      feedback.className = "msg";
+      try {
+        const prefix = cloud ? "/api/cloud/weixin" : "/api/weixin";
+        const beginPath = `${prefix}/login`;
+        const statusPath = cloud ? `${prefix}/login/status` : `${prefix}/login/status`;
+        let retryingCloudSync = false;
+        let loginId = "";
+        if (cloud) {
+          const pending = await fetch(API + statusPath).then(response => response.json());
+          if (pending.login_status === "sync_pending") {
+            if (pending.error) throw new Error(`${pending.error} 再次点击此按钮可重试同步。`);
+            retryingCloudSync = true;
+            feedback.textContent = "微信已确认，正在重试云端同步…";
+          } else if (pending.connected) {
+            feedback.textContent = pending.message || "连接成功";
+            feedback.className = "msg ok";
+            await loadWeixin(); await loadProjectLibraries();
+            return;
+          }
+        }
+        if (!retryingCloudSync) {
+          const started = await fetch(API + beginPath, {method: "POST"}).then(response => response.json());
+          if (!started.ok) throw new Error(started.error || "获取二维码失败");
+          loginId = started.login_id || "";
+          $("weixin_qr").src = started.image;
+          panel.hidden = false;
+          feedback.textContent = "等待微信扫码确认…";
+        }
+        for (let attempt = 0; attempt < 180; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const response = await fetch(API + statusPath + (loginId ? `?login_id=${encodeURIComponent(loginId)}` : ""));
+          const result = await response.json();
+          if (!response.ok || result.error) {
+            const message = result.error || result.detail || `HTTP ${response.status}`;
+            if (result.login_status === "sync_pending") {
+              throw new Error(`${message} 再次点击此按钮可重试同步。`);
+            }
+            throw new Error(message);
+          }
+          if (result.connected) {
+            feedback.textContent = result.message || "连接成功";
+            feedback.className = "msg ok";
+            panel.hidden = true;
+            await loadWeixin(); await loadProjectLibraries();
+            return;
+          }
+          if (result.expired || ["expired", "need_verifycode", "verify_code_blocked", "error", "already_bound"].includes(result.login_status)) {
+            throw new Error(result.login_status === "need_verifycode"
+              ? "微信要求验证，请稍后重新扫码并完成手机验证"
+              : result.login_status === "verify_code_blocked" ? "验证尝试过多，请稍后再试"
+              : result.login_status === "already_bound" ? "此微信账号已绑定当前接收端，请先使用已连接账号；需要重新登录时再解绑该账号"
+              : "二维码已失效，请重新发起扫码");
+          }
+          feedback.textContent = result.login_status === "scaned" ? "已扫码，等待手机确认…" : "等待微信扫码确认…";
+        }
+        throw new Error("等待超时，请重新扫码");
+      } catch (error) {
+        feedback.textContent = error.message;
+        feedback.className = "msg err";
+      } finally {
+        button.disabled = false;
+        panel.hidden = true;
+      }
+    }
+
+    async function logoutWeixin() {
+      if (!await settingsConfirm("确定解除微信连接？这会清除本机和云端保存的微信登录凭据及白名单。", {title: "解除微信连接", danger: true})) return;
+      const feedback = $("weixin_feedback");
+      try {
+        const response = await fetch(API + "/api/weixin/account", {method: "DELETE"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || result.error || result.detail || `HTTP ${response.status}`);
+        feedback.textContent = result.message || "本机和云端微信已解绑";
+        feedback.className = "msg ok";
+        await loadWeixin(); await loadProjectLibraries();
+      } catch (error) {
+        feedback.textContent = "解绑失败：" + (error.message || "本机或云端仍未清除");
+        feedback.className = "msg err";
+        await loadWeixin(); await loadProjectLibraries();
+      }
+    }
+
+    $("weixin_login").onclick = () => startWeixinLogin();
+    $("weixin_logout").onclick = () => logoutWeixin();
+
+    function maskIdentifier(value) {
+      const text = String(value || "");
+      if (text.length <= 6) return text ? "••••" : "";
+      return text.slice(0, 3) + "••••" + text.slice(-3);
+    }
+
+    function showRecentFeishuOpenId(result) {
+      let message = "";
+      if (!result) message = "正在读取待授权用户…";
+      else if (result.error || result.recent_status === "unavailable") message = "待授权用户读取失败，请让对方重新私聊机器人，列表会自动重试";
+      else if (!("pending_open_ids" in result || "pending_available" in result || "pending_open_id" in result || "last_open_id" in result)) message = "当前版本未提供待授权用户状态，请更新后重试（不影响飞书收发）";
+      $("feishu_pending_status").textContent = message;
+      $("feishu_pending_status").hidden = !message;
+      const pending = result?.pending_open_ids || [];
+      const list = $("feishu_pending_list");
+      list.textContent = "";
+      for (const id of pending) {
+        const row = document.createElement("div"); row.className = "connection-status-item";
+        const label = document.createElement("code"); label.textContent = maskIdentifier(id); label.title = id;
+        const authorize = document.createElement("button"); authorize.type = "button";
+        authorize.className = "secondary"; authorize.textContent = "授权此用户";
+        authorize.onclick = () => authorizeRecentFeishu(id, authorize);
+        row.append(label, authorize); list.append(row);
+      }
+      $("authorize_recent_feishu").hidden = pending.length > 0 || !(result?.pending_available || result?.pending_open_id);
+      $("feishu_pending_panel").hidden = pending.length === 0 && $("authorize_recent_feishu").hidden;
+    }
+
+    function maskIdentifier(value) {
+      const text = String(value || "");
+      if (text.length <= 6) return text ? "••••" : "";
+      return text.slice(0, 3) + "••••" + text.slice(-3);
+    }
+
+    let feishuRecentLoading = false;
+    async function loadRecentFeishuOpenId() {
+      if (currentPage !== "connections" || document.hidden || feishuRecentLoading) return;
+      feishuRecentLoading = true;
+      const cloud = cloudRuntimeAvailable;
+      try {
+        const path = cloud ? "/api/cloud/feishu" : "/api/feishu/recent";
+        const response = await fetch(API + path);
+        const result = await response.json();
+        if (!response.ok || (cloud && !result.connected)) throw new Error("status unavailable");
+        if (cloud === cloudRuntimeAvailable) showRecentFeishuOpenId(result);
+      } catch (_) {
+        if (cloud === cloudRuntimeAvailable) showRecentFeishuOpenId({ error: true });
+      } finally { feishuRecentLoading = false; }
+    }
+
+    async function loadFeishu() {
+      const status = $("fs_status");
+      if (!cloudRuntimeAvailable) {
+        status.textContent = runtimeIsHub ? "正在云端运行" : "正在本机运行";
+        if (typeof renderAuthorizedIds === "function") {
+          renderAuthorizedIds("feishu_authorized_list", feishuAllowedIds, revokeFeishuId, "feishu");
+        }
+        await loadRecentFeishuOpenId();
+        return;
+      }
+      status.textContent = "正在读取云端配置…";
+      try {
+        const response = await fetch(API + "/api/cloud/feishu");
+        const cloudFeishu = await response.json();
+        if (!cloudRuntimeAvailable) return;
+        if (!response.ok || !cloudFeishu.connected) throw new Error(cloudFeishu.error || cloudFeishu.detail || "尚未连接云端飞书");
+        $("fs_app_id").value = cloudFeishu.app_id || "";
+        feishuInitialAppId = cloudFeishu.app_id || "";
+        feishuAllowedIds = cloudFeishu.allowed_open_ids || [];
+        if (typeof channelRemarks !== "undefined") channelRemarks.feishu = cloudFeishu.remarks || {};
+        if (typeof renderAuthorizedIds === "function") renderAuthorizedIds("feishu_authorized_list", feishuAllowedIds, revokeFeishuId, "feishu");
+        showRecentFeishuOpenId(cloudFeishu);
+        $("fs_app_secret").value = "";
+        $("fs_app_secret").placeholder = cloudFeishu.app_secret_configured
+          ? "已保存密钥；留空保持不变" : "请输入 App Secret";
+        status.textContent = cloudFeishu.app_id && cloudFeishu.app_secret_configured
+          ? "云端飞书已配置；实际收发状态以消息验证为准"
+          : "云端飞书未配置完整；请填写 App ID 和 App Secret 后保存飞书";
+      } catch (error) {
+        if (!cloudRuntimeAvailable) return;
+        showRecentFeishuOpenId({ error: true });
+        status.textContent = "读取云端状态失败：" + error.message;
+      }
+    }
+
+    async function logoutFeishu() {
+      if (!await settingsConfirm("确定解除所有飞书连接？这会清除本机和云端保存的 App ID、App Secret、Open ID 白名单及最近授权记录。", {title: "解除飞书连接", danger: true})) return;
+      const button = $("feishu_logout");
+      const status = $("feishu_save_status");
+      button.disabled = true;
+      status.textContent = "正在解绑飞书…";
+      status.className = "msg";
+      try {
+        const response = await fetch(API + "/api/feishu/accounts", {method: "DELETE"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || result.error || result.detail || `HTTP ${response.status}`);
+        status.textContent = result.message || "本机和云端飞书账号已全部解绑";
+        status.className = "msg ok";
+        await load();
+      } catch (error) {
+        status.textContent = "解绑失败：" + (error.message || "本机或云端仍有配置未清除");
+        status.className = "msg err";
+        await loadFeishu(); if (typeof loadProjectLibraries === "function") await loadProjectLibraries();
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    const REASONING_EFFORT_KEY = "xiaoa.reasoningEffort";
+    const REASONING_OPTIONS = [
+      ["low", "推理：轻度"], ["medium", "推理：中"], ["high", "推理：高"], ["xhigh", "推理：极高"],
+    ];
+    function getReasoningEffort() {
+      try {
+        const value = localStorage.getItem(REASONING_EFFORT_KEY);
+        if (REASONING_OPTIONS.some(([option]) => option === value)) return value;
+      } catch (_) {}
+      return "high";
+    }
+    function setReasoningEffort(value) {
+      if (!REASONING_OPTIONS.some(([option]) => option === value)) return;
+      try { localStorage.setItem(REASONING_EFFORT_KEY, value); } catch (_) {}
+    }
+
+    function fillModelPicker(picker, models) {
+      const options = Array.isArray(models) ? models.filter(Boolean) : [];
+      picker.innerHTML = "";
+      if (!options.length) {
+        picker.hidden = true;
+        return;
+      }
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "选择上游模型";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      picker.appendChild(placeholder);
+      for (const model of options) {
+        const option = document.createElement("option");
+        option.value = model;
+        option.textContent = model; option.dataset.noI18n = "";
+        picker.appendChild(option);
+      }
+      picker.hidden = false;
+    }
+
+    function addModelRow(list, value) {
+      const item = typeof value === "string"
+        ? {name: value, context_window: 128000}
+        : (value || {});
+      const modelName = item.name || "";
+      const row = document.createElement("div");
+      row.className = "model-row";
+      const input = document.createElement("input");
+      input.className = "model-option";
+      input.placeholder = "添加模型，例如 gpt-4o";
+      input.value = modelName;
+      const context = document.createElement("input");
+      context.className = "model-context-window";
+      context.type = "number";
+      context.min = "4096";
+      context.max = "2000000";
+      context.step = "1024";
+      context.placeholder = "上下文(token)";
+      context.title = "模型上下文窗口(token)";
+      context.setAttribute("aria-label", "模型上下文窗口(token)");
+      context.value = item.context_window || 128000;
+      const picker = document.createElement("select");
+      picker.className = "model-picker";
+      picker.setAttribute("aria-label", "选择上游模型并填入模型框");
+      picker.title = "选择上游模型并自动填入模型框";
+      picker.onchange = () => {
+        if (!picker.value) return;
+        input.value = picker.value;
+        input.focus();
+        const discoveryStatus = list.closest(".provider-block")?.querySelector(".model-discovery-status");
+        if (discoveryStatus) {
+          discoveryStatus.textContent = `已填入模型：${picker.value}`;
+          discoveryStatus.className = "model-discovery-status ok";
+        }
+      };
+      fillModelPicker(picker, list.discoveredModels);
+      const reasoning = document.createElement("select");
+      reasoning.className = "model-reasoning";
+      reasoning.title = "推理强度";
+      reasoning.setAttribute("aria-label", "推理强度");
+      for (const [option, label] of REASONING_OPTIONS) {
+        const item = document.createElement("option");
+        item.value = option;
+        item.textContent = label;
+        reasoning.appendChild(item);
+      }
+      reasoning.value = getReasoningEffort();
+      reasoning.onchange = () => setReasoningEffort(reasoning.value);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-model";
+      remove.textContent = "×";
+      remove.title = "删除这个模型";
+      remove.setAttribute("aria-label", "删除这个模型");
+      remove.onclick = () => row.remove();
+      const status = document.createElement("span");
+      status.className = "model-test-status";
+      status.setAttribute("aria-live", "polite");
+      row.testModel = async () => {
+        const block = row.closest(".provider-block");
+        if (!block) return;
+        const baseUrl = block.querySelector(".provider-base-url").value.trim();
+        const model = input.value.trim();
+        if (!baseUrl || !model) {
+          status.textContent = "请先填写 Base URL 和模型名称";
+          status.className = "model-test-status err";
+          return;
+        }
+        status.textContent = "正在测试…";
+        status.className = "model-test-status pending";
+        try {
+          const response = await fetch(API + "/api/models/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              provider_id: block.dataset.providerId,
+              base_url: baseUrl,
+              protocol: block.querySelector(".provider-protocol").value,
+              api_key: block.querySelector(".provider-api-key").value.trim(),
+              model,
+            }),
+          });
+          const result = await response.json();
+          status.textContent = result.ok
+            ? `模型可用 · ${result.latency_ms}ms`
+            : `不可用：${result.error || "未知错误"}`;
+          status.className = `model-test-status ${result.ok ? "ok" : "err"}`;
+        } catch (error) {
+          status.textContent = "测试失败：" + error.message;
+          status.className = "model-test-status err";
+        }
+      };
+      row.append(input, context, reasoning, remove, picker, status);
+      list.appendChild(row);
+      if (!modelName) input.focus();
+    }
+
+    function addProvider(provider) {
+      provider = provider || {};
+      const block = document.createElement("section");
+      block.className = "provider-block";
+      block.dataset.providerId = provider.id || `provider-${Date.now()}-${++providerSeq}`;
+      block.dataset.isDefault = provider.is_default ? "true" : "false";
+
+      const head = document.createElement("div");
+      head.className = "provider-head";
+      const name = document.createElement("input");
+      name.className = "provider-name";
+      name.placeholder = "厂商名称，例如 OpenAI";
+      const defaultName = provider.is_default && provider.name === "默认接口";
+      name.value = defaultName ? "" : provider.name || "";
+      if (defaultName) { name.placeholder = "默认接口"; name.dataset.defaultName = provider.name; }
+      head.appendChild(name);
+      if (provider.is_default) {
+        const badge = document.createElement("span");
+        badge.className = "provider-badge";
+        badge.textContent = "默认";
+        head.appendChild(badge);
+      } else {
+        const removeProvider = document.createElement("button");
+        removeProvider.type = "button";
+        removeProvider.className = "remove-provider";
+        removeProvider.textContent = "×";
+        removeProvider.title = "删除这个厂商接口";
+        removeProvider.setAttribute("aria-label", "删除这个厂商接口");
+        removeProvider.onclick = () => block.remove();
+        head.appendChild(removeProvider);
+      }
+
+      const protocolLabel = document.createElement("label");
+      protocolLabel.textContent = "\u63a5\u53e3\u7c7b\u578b";
+      const protocol = document.createElement("select");
+      protocol.className = "provider-protocol";
+      protocol.add(new Option("OpenAI Chat Completions", "openai"));
+      protocol.add(new Option("OpenAI Responses", "responses"));
+      protocol.add(new Option("Anthropic", "anthropic"));
+      protocol.value = ["openai", "responses", "anthropic"].includes(provider.protocol) ? provider.protocol : "openai";
+      const baseLabel = document.createElement("label");
+      baseLabel.textContent = "Base URL";
+
+      const baseUrl = document.createElement("input");
+      baseUrl.className = "provider-base-url";
+      baseUrl.value = provider.base_url || "";
+      const updateProtocolFields = () => {
+        const anthropic = protocol.value === "anthropic";
+        baseLabel.textContent = anthropic
+          ? "Base URL(\u4e0d\u542b /v1\uff0cAnthropic API \u6839\u5730\u5740)"
+          : protocol.value === "responses" ? "Base URL(/v1，Responses API)"
+          : "Base URL(\u901a\u5e38\u586b\u5230 /v1\uff0cOpenAI Chat Completions)";
+        baseUrl.placeholder = anthropic ? "https://api.anthropic.com" : "https://api.example.com/v1";
+        if (anthropic && !baseUrl.value.trim()) baseUrl.value = "https://api.anthropic.com";
+      };
+      protocol.onchange = updateProtocolFields;
+      updateProtocolFields();
+      const keyLabel = document.createElement("label");
+      keyLabel.textContent = "API Key";
+      const apiKey = document.createElement("input");
+      apiKey.className = "provider-api-key";
+      apiKey.placeholder = "留空则不修改";
+      apiKey.value = provider.api_key_masked || "";
+      const keyField = provider.is_default
+        ? "llm.default.api_key"
+        : `llm.providers.${block.dataset.providerId}.api_key`;
+      const modelLabel = document.createElement("label");
+      modelLabel.textContent = "模型";
+      const modelList = document.createElement("div");
+      modelList.className = "model-list";
+      modelList.discoveredModels = [];
+      for (const model of provider.models || []) {
+        addModelRow(modelList, {
+          name: model,
+          context_window: provider.context_windows?.[model] || 128000,
+        });
+      }
+      if (!provider.models || !provider.models.length) addModelRow(modelList, "");
+      const modelActions = document.createElement("div");
+      modelActions.className = "model-actions";
+      const discover = document.createElement("button");
+      discover.type = "button";
+      discover.className = "discover-models";
+      discover.textContent = "从上游探测模型";
+      discover.setAttribute("aria-label", "从上游探测模型");
+      const discoveryStatus = document.createElement("span");
+      discoveryStatus.className = "model-discovery-status";
+      discover.onclick = async () => {
+        const base = baseUrl.value.trim();
+        if (!base) {
+          discoveryStatus.textContent = "请先填写 Base URL";
+          discoveryStatus.className = "model-discovery-status err";
+          return;
+        }
+        discover.disabled = true;
+        discover.textContent = "探测中…";
+        discoveryStatus.textContent = "正在读取上游模型目录…";
+        discoveryStatus.className = "model-discovery-status";
+        try {
+          const response = await fetch(API + "/api/models/discover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              provider_id: block.dataset.providerId,
+              base_url: base,
+              protocol: protocol.value,
+              api_key: apiKey.value.trim(),
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) throw new Error(result.error || `请求失败(${response.status})`);
+          const models = Array.isArray(result.models) ? result.models : [];
+          modelList.discoveredModels = models;
+          modelList.querySelectorAll(".model-picker").forEach(picker => fillModelPicker(picker, models));
+          discoveryStatus.textContent = models.length
+            ? `上游返回 ${models.length} 个模型，点击下拉框即可填入`
+            : "上游没有返回可用模型";
+          discoveryStatus.className = `model-discovery-status ${models.length ? "ok" : "err"}`;
+        } catch (error) {
+          modelList.discoveredModels = [];
+          modelList.querySelectorAll(".model-picker").forEach(picker => fillModelPicker(picker, []));
+          discoveryStatus.textContent = "探测失败：" + error.message;
+          discoveryStatus.className = "model-discovery-status err";
+        } finally {
+          discover.disabled = false;
+          discover.textContent = "从上游探测模型";
+        }
+      };
+      const addModel = document.createElement("button");
+      addModel.type = "button";
+      addModel.className = "add-model";
+      addModel.textContent = "+ 添加模型";
+      addModel.onclick = () => addModelRow(modelList, "");
+      const test = document.createElement("button");
+      test.type = "button";
+      test.className = "test-model";
+      test.textContent = "测试";
+      test.title = "测试此接口的所有模型，结果显示在各模型下方";
+      test.setAttribute("aria-label", "测试此接口的所有模型");
+      test.onclick = async () => {
+        if (test.disabled) return;
+        const rows = Array.from(modelList.querySelectorAll(".model-row"));
+        if (!rows.length) {
+          discoveryStatus.textContent = "请先添加模型";
+          discoveryStatus.className = "model-discovery-status err";
+          return;
+        }
+        test.disabled = true;
+        test.textContent = "测试中";
+        try {
+          for (const row of rows) await row.testModel();
+        } finally {
+          test.disabled = false;
+          test.textContent = "测试";
+        }
+      };
+      modelActions.append(discover, addModel, test, discoveryStatus);
+
+      block.append(head, protocolLabel, protocol, baseLabel, baseUrl, keyLabel, apiKey, modelLabel, modelList, modelActions);
+      $("provider_list").appendChild(block);
+      setManagedInput(apiKey, keyField);
+      if (!provider.id) name.focus();
+    }
+
+    function setProviders(providers) {
+      $("provider_list").innerHTML = "";
+      for (const provider of providers || []) addProvider(provider);
+    }
+
+    function collectProviders() {
+      return Array.from(document.querySelectorAll(".provider-block")).map(block => {
+        const modelItems = Array.from(block.querySelectorAll(".model-row")).map(row => ({
+          name: row.querySelector(".model-option").value.trim(),
+          context_window: Number(row.querySelector(".model-context-window").value || 128000),
+        })).filter(item => item.name);
+        return {
+          id: block.dataset.providerId,
+          name: block.querySelector(".provider-name").value.trim() || block.querySelector(".provider-name").dataset.defaultName || "",
+          protocol: block.querySelector(".provider-protocol").value,
+          base_url: block.querySelector(".provider-base-url").value.trim(),
+          api_key: block.querySelector(".provider-api-key").value.trim(),
+          models: modelItems.map(item => item.name),
+          context_windows: Object.fromEntries(
+            modelItems.map(item => [item.name, item.context_window])
+          ),
+        };
+      });
+    }
+
+    async function extensionRequest(path, body) {
+      const response = await fetch(API + path, body ? {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      } : undefined);
+      const text = await response.text();
+      let result = {};
+      try { result = text ? JSON.parse(text) : {}; } catch (_) { result = { error: text }; }
+      if (!response.ok || result.ok === false) {
+        throw new Error(result.error || result.message || `请求失败(${response.status})`);
+      }
+      return result;
+    }
+
+    function setExtensionStatus(message, error = false) {
+      const status = $("extension_status");
+      status.textContent = message;
+      status.className = `msg${message ? (error ? " err" : " ok") : ""}`;
+    }
+
+    let inspectedExtension = null;
+
+    function resetExtensionReview() {
+      inspectedExtension = null;
+      $("extension_review").hidden = true;
+      $("extension_review_content").textContent = "";
+      $("install_extension").textContent = "检查";
+    }
+
+    function renderExtensionList(kind, items) {
+      const list = $({tool: "tool_extensions", skill: "skill_extensions", plugin: "plugin_extensions"}[kind]);
+      list.innerHTML = "";
+      if (!items || !items.length) {
+        const empty = document.createElement("div");
+        empty.className = "extension-empty";
+        empty.textContent = "尚未安装";
+        list.appendChild(empty);
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "extension-item";
+        const info = document.createElement("div");
+        info.className = "extension-info";
+        const name = document.createElement("div");
+        name.className = "extension-name";
+        name.textContent = item.name || "未命名";
+        if (item.name) name.dataset.noI18n = "";
+        const meta = document.createElement("div");
+        meta.className = "extension-meta";
+        const enabled = item.enabled !== false;
+        const version = item.version ? `v${String(item.version).replace(/^v/i, "")}` : "无版本号";
+        const source = item.source || item.source_url || item.url || item.repository || "本地";
+        const runtime = item.runtime ? `${item.runtime} · ` : "";
+        const metaText = document.createElement("span");
+        metaText.textContent = `${version} · ${runtime}${source} · `;
+        metaText.dataset.i18nEn = `${item.version ? version : "No version"} · ${runtime}${source === "本地" ? "Local" : source} · `;
+        meta.appendChild(metaText);
+        const state = document.createElement("span");
+        state.className = `extension-state${enabled ? "" : " off"}`;
+        state.textContent = enabled ? "已启用" : "已停用";
+        meta.appendChild(state);
+        info.append(name, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "extension-actions";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = enabled ? "停用" : "启用";
+        toggle.onclick = () => changeExtension(toggle, "/api/extensions/enable", {
+          kind, name: item.name, enabled: !enabled,
+        }, enabled ? "已停用" : "已启用");
+        const rollback = document.createElement("button");
+        rollback.type = "button";
+        rollback.textContent = "回滚";
+        rollback.onclick = () => changeExtension(rollback, "/api/extensions/rollback", {
+          kind, name: item.name,
+        }, "已回滚");
+        actions.append(toggle, rollback);
+        row.append(info, actions);
+        list.appendChild(row);
+      }
+    }
+
+    async function loadExtensions() {
+      try {
+        const data = await extensionRequest("/api/extensions");
+        renderExtensionList("tool", data.tools || []);
+        renderExtensionList("skill", data.skills || []);
+        renderExtensionList("plugin", data.plugins || []);
+      } catch (error) {
+        renderExtensionList("tool", []);
+        renderExtensionList("skill", []);
+        renderExtensionList("plugin", []);
+        setExtensionStatus("扩展列表加载失败：" + error.message, true);
+      }
+    }
+
+    async function loadToolCatalog() {
+      const response = await fetch(API + "/api/tools/catalog");
+      const result = await response.json();
+      if (!response.ok || result.ok === false) throw new Error(result.error || "工具目录读取失败");
+      $("tool_summary").textContent = `已启用 ${result.total || 0} 个内置工具，按工作类型分类显示。`;
+      const root = $("tool_groups");
+      root.innerHTML = "";
+      for (const group of result.groups || []) {
+        const details = document.createElement("details");
+        details.className = "tool-group";
+        const summary = document.createElement("summary");
+        summary.textContent = `${group.label} · ${group.tools.length}`;
+        const list = document.createElement("div");
+        list.className = "tool-list";
+        for (const tool of group.tools) {
+          const item = document.createElement("div");
+          item.className = "tool-item";
+          const name = document.createElement("code");
+          name.textContent = tool.name;
+          const description = document.createElement("span");
+          description.className = "tool-description";
+          description.textContent = tool.description || "内置工具";
+          const english = window.XiaoALanguage?.toolDescription(tool);
+          if (english) description.dataset.i18nEn = english;
+          else if (tool.description) description.dataset.noI18n = "";
+          item.append(name, description);
+          list.appendChild(item);
+        }
+        details.append(summary, list);
+        root.appendChild(details);
+      }
+    }
+
+    async function loadAudit() {
+      const params = new URLSearchParams({page: "1", page_size: "50"});
+      if ($("audit_category").value) params.set("category", $("audit_category").value);
+      if ($("audit_status").value) params.set("status", $("audit_status").value);
+      const response = await fetch(API + "/api/audit?" + params);
+      const result = await response.json();
+      if (!response.ok || result.ok === false) throw new Error(result.error || "操作记录读取失败");
+      $("audit_summary").textContent = `共 ${result.total || 0} 条，当前显示最近 ${result.items.length} 条。`;
+      const root = $("audit_list");
+      root.innerHTML = "";
+      if (!result.items.length) {
+        const empty = document.createElement("div");
+        empty.className = "extension-empty";
+        empty.textContent = "暂无电脑操作记录";
+        root.appendChild(empty);
+        return;
+      }
+      for (const item of result.items) {
+        const details = document.createElement("details");
+        details.className = "audit-item";
+        const summary = document.createElement("summary");
+        const title = document.createElement("span");
+        title.className = "audit-title";
+        title.textContent = item.tool_name || "操作";
+        const meta = document.createElement("span");
+        meta.className = "audit-meta";
+        const status = {ok: "成功", failed: "失败", rejected: "已拒绝"}[item.status] || item.status;
+        meta.textContent = `${status || "未知"} · ${item.duration_ms || 0}ms`;
+        const detail = document.createElement("div");
+        detail.className = "audit-detail";
+        const created = item.created_at ? new Date(item.created_at).toLocaleString("zh-CN") : "";
+        detail.textContent = `${created}\n分类：${item.category || "其他"}\n参数：${JSON.stringify(item.parameters || {}, null, 2)}${item.error ? "\n错误：" + item.error : ""}`;
+        detail.dataset.i18nEn = `${created}\nCategory: ${item.category || "Other"}\nParameters: ${JSON.stringify(item.parameters || {}, null, 2)}${item.error ? "\nError: " + item.error : ""}`;
+        summary.append(title, meta);
+        details.append(summary, detail);
+        root.appendChild(details);
+      }
+    }
+
+    async function changeExtension(button, path, body, successMessage) {
+      button.disabled = true;
+      setExtensionStatus("处理中…");
+      try {
+        await extensionRequest(path, body);
+        setExtensionStatus(successMessage);
+        await Promise.all([
+          loadExtensions(),
+          loadToolCatalog().catch(error => { $("tool_summary").textContent = "读取失败：" + error.message; }),
+          loadAudit().catch(error => { $("audit_summary").textContent = "读取失败：" + error.message; }),
+        ]);
+        settingsLoaded = true;
+        if (currentPage === "connections") await loadChannels();
+      } catch (error) {
+        setExtensionStatus("操作失败：" + error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    $("add_provider").onclick = () => addProvider({});
+
+    function setManagedInput(input, field) {
+      const envName = envManagedFields[field] || "";
+      const hintId = `${input.id || blockSafeId(field)}_env_hint`;
+      let hint = document.getElementById(hintId);
+      if (!hint) {
+        hint = document.createElement("div");
+        hint.id = hintId;
+        hint.className = "hint";
+        input.insertAdjacentElement("afterend", hint);
+      }
+      input.disabled = Boolean(envName);
+      input.title = envName ? `当前由环境变量 ${envName} 接管` : "";
+      hint.hidden = !envName;
+      hint.textContent = envName ? `当前由环境变量 ${envName} 接管，此处填写不生效。` : "";
+    }
+
+    function blockSafeId(value) {
+      return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+    }
+
+    function updateVoiceStatus() {
+      const configured = Boolean($("tc_secret_id").value.trim() && $("tc_secret_key").value.trim());
+      const state = configured ? "\u5df2\u542f\u7528 \u2713" : "\u672a\u914d\u7f6e \u2717";
+      $("voice_status").textContent = `\u5408\u6210:\u817e\u8baf\u4e91 ${state}\u3000\u8bc6\u522b:\u817e\u8baf\u4e91 ${state}`;
+    }
+
+    function setServiceAvailable(available, message = "") {
+      $("service_state").hidden = available;
+      $("service_state_text").textContent = message || "设置服务未连接，设置和历史数据没有被删除。";
+      for (const id of ["save", "backup_now", "install_extension"]) $(id).disabled = !available;
+    }
+
+    function renderCloudWebAddress(url) {
+      $("cloud_web_url").textContent = url;
+      $("cloud_web_url").hidden = !url;
+      $("cloud_web_empty").hidden = !!url;
+      $("cloud_web_empty").textContent = "尚未绑定云服务器，连接成功后自动显示";
+      $("copy_cloud_web_url").hidden = !url;
+      $("cloud_web_copy_status").textContent = "";
+    }
+
+    $("copy_cloud_web_url").onclick = async () => {
+      const url = $("cloud_web_url").textContent;
+      if (!url) return;
+      try {
+        let copied = false;
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(url); copied = true; } catch (_) {}
+        }
+        if (!copied) {
+          const active = document.activeElement;
+          const input = document.createElement("textarea");
+          input.value = url;
+          input.readOnly = true;
+          input.style.cssText = "position:fixed;left:-9999px;top:0";
+          document.body.appendChild(input);
+          try {
+            input.focus(); input.select(); input.setSelectionRange(0, url.length);
+            copied = document.execCommand("copy");
+          } finally {
+            input.remove(); active?.focus();
+          }
+        }
+        if (!copied) throw new Error("copy failed");
+        $("cloud_web_copy_status").textContent = "已复制";
+      } catch (_) {
+        $("cloud_web_copy_status").textContent = "复制失败，请选中上方地址手动复制";
+      }
+    };
+
+    async function load() {
+      try {
+        const response = await fetch(API + "/api/settings");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const d = await response.json();
+        setServiceAvailable(true);
+      envManagedFields = d.env_managed_fields || {};
+      const warnings = (d.security && d.security.warnings) || [];
+      $("security_state").hidden = warnings.length === 0;
+      $("security_state_text").textContent = warnings.join(" ");
+      setProviders(d.llm.providers || [{
+        id: "default", name: "默认接口", base_url: d.llm.base_url,
+        protocol: d.llm.protocol,
+        api_key_masked: d.llm.api_key_masked, models: d.llm.models, is_default: true,
+      }]);
+      const backup = d.memory_backup || {};
+      $("memory_backup_dir").value = backup.dir || "";
+      $("memory_backup_interval").value = backup.interval_minutes || 60;
+      $("memory_backup_keep").value = backup.keep_count || 30;
+      $("memory_backup_resolved").textContent = backup.resolved_dir || "";
+      $("backup_status").textContent = backup.last_success
+        ? `最近成功：${backup.last_success}`
+        : (backup.last_error ? `失败：${backup.last_error}` : "尚未备份");
+      const sync = d.memory_sync_audit || {};
+      const syncTime = sync.last_success ? new Date(sync.last_success).toLocaleString() : "尚无成功记录";
+      let syncText = "云端记忆同步：今天尝试 " + (sync.today_attempts || 0) + " 次，成功 " + (sync.today_successes || 0) + " 次；最近成功：" + syncTime;
+      if (sync.pending) syncText += "；有 " + sync.pending + " 次未完成";
+      if (sync.last_error) syncText += "；最近错误：" + sync.last_error;
+      if (sync.available === false) syncText += "；记录读取失败：" + (sync.error || "未知错误");
+      $("memory_sync_status").textContent = syncText;
+      $("tc_secret_id").value = d.voice.secret_id_masked || "";
+      $("tc_secret_key").value = d.voice.secret_key_masked || "";
+      setManagedInput($("tc_secret_id"), "voice.secret_id");
+      setManagedInput($("tc_secret_key"), "voice.secret_key");
+      $("tc_region").value = d.voice.region || "";
+      updateVoiceStatus();
+      voiceCfg = d.voice;
+      const currentVoice = await fetch(API + "/api/current_voice").then(response => response.json());
+      if (!Array.from($("tts_voice").options).some(option => Number(option.value) === currentVoice.voice)) {
+        $("tts_voice").add(new Option(`当前音色 ${currentVoice.voice}`, currentVoice.voice));
+      }
+      $("tts_voice").value = String(currentVoice.voice || "");
+      $("fs_app_id").value = d.feishu.app_id || "";
+      $("fs_app_secret").value = "";
+      feishuInitialAppId = d.feishu.app_id || "";
+      $("fs_app_secret").placeholder = d.feishu.app_secret_masked
+        ? "已保存密钥；留空保持不变" : "请输入 App Secret";
+      setManagedInput($("fs_app_id"), "feishu.app_id");
+      setManagedInput($("fs_app_secret"), "feishu.app_secret");
+      feishuAllowedIds = d.feishu.allowed_open_ids || [];
+       channelRemarks.feishu = d.feishu.remarks || {};
+      renderAuthorizedIds("feishu_authorized_list", feishuAllowedIds, revokeFeishuId, "feishu");
+      $("fs_status").textContent = d.feishu.enabled ? "已启用 ✓" : "未启用";
+      const role = d.role || {};
+      runtimeIsHub = role.mode === "hub";
+      $("runtime_scope_hint").hidden = !runtimeIsHub;
+      $("feishu_logout").disabled = runtimeIsHub;
+      $("feishu_logout").title = runtimeIsHub ? "请在本机小A解绑飞书应用；单个用户可在下方列表解绑" : "";
+      document.querySelectorAll("[data-local-desktop-only]").forEach(card => { card.hidden = runtimeIsHub; });
+      const cloudPreview = role.connection_preview || {};
+      cloudRuntimeAvailable = role.mode === "worker" && Boolean(cloudPreview.host);
+      showRecentFeishuOpenId(cloudRuntimeAvailable ? null : d.feishu);
+      scheduleCloudSelected = runtimeIsHub || (role.mode === "worker" && role.connection_configured === true);
+      updateScheduleFormUI();
+      settingsLoaded = true;
+      if (currentPage === "connections") loadChannels().catch(() => {});
+      $("cloud_host").value = cloudJob?.host || cloudPreview.host || "";
+      $("cloud_username").value = cloudJob?.username || "root";
+      $("cloud_password").value = "";
+      $("worker_id").value = role.worker_id || "";
+      const preview = role.connection_preview;
+      $("connection_preview").textContent = preview
+        ? `已保存：${preview.host}:${preview.port}`
+        : "";
+      const desktop = d.desktop || {};
+      desktopPackaged = !!desktop.packaged;
+      $("open_at_login").checked = !!desktop.open_at_login;
+      $("open_at_login").disabled = !desktopPackaged;
+      $("open_at_login_status").textContent = desktopPackaged
+        ? (desktop.open_at_login ? "已开启；当前 EXE 路径会在每次启动时自动校正。" : "已关闭。")
+        : "开发模式不注册开机启动项；打包后的便携版可用。";
+      $("open_at_login_auth_warning").hidden = !desktop.startup_auth_warning;
+      localAppVersion = d.version || "";
+      $("update_current_version").textContent = versionLabel(localAppVersion);
+      renderCloudVersion();
+      if (["system", "connections"].includes(currentPage)) loadReleaseInfo().catch(() => {});
+      renderCloudWebAddress(role.web_url || "");
+      $("auth_status").textContent = (d.auth && d.auth.enabled) ? "已设密码 ✓" : "未设密码（远程网页访问已关闭）";
+      setManagedInput($("web_password"), "auth.password");
+      const isolation = d.isolation || {};
+      $("isolation_max_mb").value = isolation.max_mb || 1024;
+      $("isolation_path").textContent = isolation.path || "未创建";
+      $("isolation_usage").textContent =
+        `${isolation.used_mb || 0} MB / ${isolation.max_mb || 1024} MB`;
+        await Promise.all([
+          loadExtensions(),
+          loadToolCatalog().catch(error => { $("tool_summary").textContent = "读取失败：" + error.message; }),
+          loadAudit().catch(error => { $("audit_summary").textContent = "读取失败：" + error.message; }),
+        ]);
+      } catch (error) {
+        setProviders([]);
+        setServiceAvailable(false, "设置服务未连接，当前显示的不是已保存配置。请启动小A后端再重试。");
+        throw error;
+      }
+    }
+
+    async function refreshIsolationStatus() {
+      if (currentPage !== "system") return;
+      try {
+        const response = await fetch(API + "/api/isolation/status");
+        if (!response.ok) return;
+        const isolation = await response.json();
+        $("isolation_path").textContent = isolation.path || "未创建";
+        $("isolation_usage").textContent =
+          `${isolation.used_mb || 0} MB / ${isolation.max_mb || 1024} MB`;
+      } catch (_) { /* 设置页暂时离线时保留上次显示 */ }
+    }
+
+    function versionLabel(value) {
+      const text = String(value || "").replace(/^v/i, "");
+      return text ? `v${text}` : "未知";
+    }
+
+    async function loadReleaseInfo() {
+      if (runtimeIsHub) return;
+      const status = $("update_status");
+      try {
+        const response = await fetch(API + "/api/update/release");
+        const result = await response.json();
+        $("update_current_version").textContent = versionLabel(result.current_version);
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        localAppVersion = result.current_version || localAppVersion;
+        latestRelease = result.latest;
+        renderCloudVersion();
+        $("update_latest_version").textContent = versionLabel(result.latest?.version);
+        $("update_release_notes").textContent = result.latest?.notes || result.message || "便携版发布后，可在此检查 GitHub Releases 更新。";
+        $("update_local").hidden = !result.update_available || !desktopPackaged;
+        status.textContent = result.update_available ? "发现新版本" : result.latest ? "当前已是最新版本" : "暂无公开版本";
+        status.className = "msg";
+        if (["queued", "checking", "downloading", "cancelling", "staged", "replacing", "restarting", "verifying"].includes(result.job?.stage)) {
+          startLocalUpdatePolling();
+        }
+        return result;
+      } catch (error) {
+        latestRelease = null;
+        renderCloudVersion();
+        status.textContent = "检查失败：" + error.message;
+        status.className = "msg err";
+        $("update_local").hidden = true;
+        throw error;
+      }
+    }
+
+    function startLocalUpdatePolling() {
+      if (updatePollTimer) return;
+      updatePollStartedAt = Date.now();
+      $("update_local").disabled = true;
+      updatePollTimer = setInterval(pollLocalUpdate, 800);
+      pollLocalUpdate();
+    }
+
+    async function pollLocalUpdate() {
+      const finish = (message, error = false) => {
+        if (updatePollTimer) clearInterval(updatePollTimer);
+        updatePollTimer = null;
+        $("update_progress").hidden = true;
+        $("update_local").disabled = false;
+        if (message) {
+          $("update_status").textContent = message;
+          $("update_status").className = error ? "msg err" : "msg";
+        }
+      };
+      try {
+        const response = await fetch(API + "/api/update/job");
+        const result = await response.json();
+        const activeStages = ["queued", "checking", "downloading", "cancelling", "replacing", "restarting", "verifying"];
+        const terminalStages = ["done", "error", "rolled_back", "cancelled"];
+        const progress = $("update_progress");
+        progress.hidden = !activeStages.includes(result.stage);
+        progress.value = Number(result.percent || 0);
+        const staged = result.stage === "staged";
+        $("restart_update").hidden = !staged || !result.prepared_config;
+        $("restart_update").disabled = false;
+        $("cancel_update").hidden = !["queued", "checking", "downloading", "cancelling", "staged", "error", "rolled_back"].includes(result.stage);
+        $("cancel_update").disabled = result.stage === "cancelling";
+        $("update_local").disabled = staged || activeStages.includes(result.stage);
+        $("update_status").textContent = result.error || result.message || "正在更新…";
+        $("update_status").className = ["error", "rolled_back"].includes(result.stage) ? "msg err" : "msg";
+        if (staged) {
+          if (updatePollTimer) clearInterval(updatePollTimer);
+          updatePollTimer = null;
+          if (!result.prepared_config) {
+            $("update_status").textContent = "旧版更新未能启动，请点击取消更新；需要手动切换修复版一次。";
+            $("update_status").className = "msg err";
+          }
+          return;
+        }
+        if (terminalStages.includes(result.stage)) {
+          finish();
+          if (result.stage === "done") loadReleaseInfo().catch(() => {});
+          return;
+        }
+        if (Date.now() - updatePollStartedAt >= UPDATE_POLL_TIMEOUT_MS) {
+          finish("更新超时，请查看 data/update.log 后重试。", true);
+        }
+      } catch (_) {
+        if (Date.now() - updatePollStartedAt >= UPDATE_POLL_TIMEOUT_MS) {
+          finish("更新超时，请查看 data/update.log 后重试。", true);
+        }
+      }
+    }
+
+    $("check_update").onclick = () => loadReleaseInfo().catch(() => {});
+    $("update_local").onclick = async () => {
+      if (!await settingsConfirm("将下载并校验新版，完成后可选择立即重启更新或取消。重启更新会关闭当前任务和窗口，保留数据。继续下载吗？", {title: "更新本机小A"})) return;
+      $("update_local").disabled = true;
+      try {
+        const response = await fetch(API + "/api/update/install", {method: "POST"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        startLocalUpdatePolling();
+      } catch (error) {
+        $("update_status").textContent = error.message;
+        $("update_status").className = "msg err";
+        $("update_local").disabled = false;
+      }
+    };
+    $("restart_update").onclick = async () => {
+      if (!await settingsConfirm("将关闭小A的全部窗口、后端及相关子进程，替换新版并重新启动。请先结束正在执行的任务。继续吗？", {title: "重启更新"})) return;
+      $("restart_update").disabled = true;
+      $("cancel_update").hidden = true;
+      try {
+        const response = await fetch(API + "/api/update/restart", {method: "POST"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        startLocalUpdatePolling();
+      } catch (error) {
+        $("restart_update").disabled = false;
+        $("cancel_update").hidden = false;
+        $("update_status").textContent = error.message;
+        $("update_status").className = "msg err";
+      }
+    };
+    $("cancel_update").onclick = async () => {
+      $("cancel_update").disabled = true;
+      try {
+        const response = await fetch(API + "/api/update/cancel", {method: "POST"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        $("restart_update").hidden = true;
+        startLocalUpdatePolling();
+      } catch (error) {
+        $("cancel_update").disabled = false;
+        $("update_status").textContent = error.message;
+        $("update_status").className = "msg err";
+      }
+    };
+    $("retry_load").onclick = () => load().catch(() => {});
+
+    $("install_extension").onclick = async () => {
+      const button = $("install_extension");
+      const url = $("extension_url").value.trim();
+      let parsed;
+      try { parsed = new URL(url); } catch (_) {
+        setExtensionStatus("请填写有效的 GitHub 地址", true);
+        return;
+      }
+      if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
+        setExtensionStatus("请输入 https://github.com/ 开头的地址", true);
+        return;
+      }
+      const kind = $("extension_kind").value;
+      const key = `${kind}\n${url}`;
+      button.disabled = true;
+      try {
+        if (!inspectedExtension || inspectedExtension.key !== key) {
+          button.textContent = "检查中";
+          setExtensionStatus("正在下载并检查，不会安装…");
+          const inspected = await extensionRequest("/api/extensions/inspect", {url, kind});
+          inspectedExtension = {key, inspected};
+          $("extension_review_warning").textContent = inspected.warning || "第三方内容不可信，请核对后再安装。";
+          $("extension_review_content").textContent = inspected.untrusted_content ||
+            JSON.stringify({manifest: inspected.manifest, files: inspected.files}, null, 2);
+          $("extension_review").hidden = false;
+          setExtensionStatus(`已检查 ${inspected.name || "扩展"}，请核对上方内容后确认安装`);
+          return;
+        }
+        if (!await settingsConfirm("已显示第三方扩展内容。确认信任该来源并安装？", {title: "确认安装扩展"})) return;
+        button.textContent = "安装中";
+        setExtensionStatus("正在安装…");
+        await extensionRequest("/api/extensions/install", {url, kind, confirm_install: true});
+        $("extension_url").value = "";
+        resetExtensionReview();
+        setExtensionStatus("安装完成");
+        await loadExtensions();
+      } catch (error) {
+        setExtensionStatus("安装失败：" + error.message, true);
+      } finally {
+        button.disabled = false;
+        button.textContent = inspectedExtension ? "确认安装" : "检查";
+      }
+    };
+    $("extension_url").addEventListener("input", resetExtensionReview);
+    $("extension_kind").addEventListener("change", resetExtensionReview);
+
+    async function saveCurrentPage(statusElement = $("msg"), button = $("save")) {
+      const msg = statusElement;
+      msg.textContent = "保存中…"; msg.className = "msg";
+      button.disabled = true;
+      const bodies = {
+        models: () => ({
+          providers: collectProviders(),
+        }),
+        memory: () => ({
+          memory_backup_dir: $("memory_backup_dir").value,
+          memory_backup_interval_minutes: Number($("memory_backup_interval").value || 60),
+          memory_backup_keep_count: Number($("memory_backup_keep").value || 30),
+        }),
+        voice: () => ({
+          tc_secret_id: $("tc_secret_id").value,
+          tc_secret_key: $("tc_secret_key").value,
+          tc_region: $("tc_region").value,
+          tts_voice: Number($("tts_voice").value),
+        }),
+        connections: () => ({
+          feishu_app_id: $("fs_app_id").value,
+          feishu_app_secret: $("fs_app_secret").value,
+        }),
+        system: () => ({
+          web_password: $("web_password").value,
+          isolation_max_mb: Number($("isolation_max_mb").value || 1024),
+          ...(desktopPackaged ? {open_at_login: $("open_at_login").checked} : {}),
+        }),
+      };
+      if (!bodies[currentPage]) {
+        button.disabled = false;
+        return;
+      }
+      const body = bodies[currentPage]();
+      try {
+        const r = await fetch(API + "/api/settings/" + currentPage, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        let d = await r.json();
+        if (d.ok && cloudRuntimeAvailable && ["models", "voice"].includes(currentPage)) {
+          const cloudResponse = await fetch(API + "/api/cloud/runtime", {method: "POST"});
+          const cloudResult = await cloudResponse.json();
+          if (!cloudResponse.ok || !cloudResult.ok) {
+            let cloudError = cloudResult.detail || cloudResult.error || `HTTP ${cloudResponse.status}`;
+            if (cloudError.includes("不允许修改的环境变量")) {
+              cloudError = "云端脚本版本较旧，请到「消息连接」页重新部署一次云端后再保存";
+            }
+            d.cloud_warning = cloudError;
+          } else {
+            d.cloud_synced = true;
+          }
+        }
+        if (d.ok && d.warning) {
+          msg.textContent = "其余设置已保存；" + d.warning;
+          msg.className = "msg err";
+          setTimeout(load, 500);
+        }
+        else if (d.ok && d.cloud_warning) {
+          msg.textContent = "本机已保存；云端同步失败：" + d.cloud_warning;
+          msg.className = "msg err"; setTimeout(load, 500);
+        }
+        else if (d.ok) {
+          msg.textContent = d.restart_required
+            ? "已保存，请重启小A使云端连接生效"
+            : (d.cloud_synced ? "已保存并同步到云端 ✓" : "已保存 ✓");
+          msg.className = "msg ok"; setTimeout(load, 500);
+        }
+        else { msg.textContent = "保存失败:" + (d.error || ""); msg.className = "msg err"; }
+      } catch (e) { msg.textContent = "保存失败:" + e.message; msg.className = "msg err"; }
+      finally { button.disabled = false; }
+    }
+
+    $("save").onclick = () => saveCurrentPage();
+    async function revokeFeishuId(id) {
+      if (!await settingsConfirm(`确定解绑飞书用户 ${maskIdentifier(id)}？`, {title: "解绑飞书用户", danger: true})) return;
+      const cloud = channelTarget() === "cloud";
+      const response = await fetch(API + (cloud ? "/api/cloud/feishu/allowlist" : "/api/feishu/allowlist"), {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({allowed_user_ids: feishuAllowedIds.filter(value => value !== id)}),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+      await loadFeishu(); if (typeof loadProjectLibraries === "function") await loadProjectLibraries();
+    }
+
+    async function authorizeRecentFeishu(openId = "", selectedButton = null) {
+      const cloud = channelTarget() === "cloud";
+      const button = selectedButton || $("authorize_recent_feishu");
+      const status = $("feishu_save_status");
+      button.disabled = true;
+      try {
+        const response = await fetch(API + (cloud ? "/api/cloud/feishu/authorize-recent" : "/api/feishu/authorize-recent") + (openId ? `?open_id=${encodeURIComponent(openId)}` : ""), {method: "POST"});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+        status.textContent = result.message || "最近私聊用户已授权";
+        status.className = "msg ok";
+        await loadFeishu(); if (typeof loadProjectLibraries === "function") await loadProjectLibraries();
+      } catch (error) {
+        status.textContent = "授权失败：" + error.message;
+        status.className = "msg err";
+      } finally { button.disabled = false; }
+    }
+
+    $("authorize_recent_feishu").onclick = () => authorizeRecentFeishu();
+    $("save_feishu").onclick = async () => {
+      const button = $("save_feishu");
+      const status = $("feishu_save_status");
+      if (channelTarget() !== "cloud") {
+        await saveCurrentPage(status, button);
+        return;
+      }
+      button.disabled = true;
+      status.textContent = "正在保存云端飞书配置…";
+      status.className = "msg";
+      try {
+        const credentials = cloudFeishuCredentials();
+        const response = await fetch(API + "/api/cloud/feishu", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            allowed_open_ids: feishuAllowedIds.join(", "),
+            app_id: credentials.appId,
+            app_secret: credentials.appSecret,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.detail || result.error || `HTTP ${response.status}`);
+        $("fs_app_secret").value = "";
+        status.textContent = "云端飞书配置已保存并重启";
+        status.className = "msg ok";
+        await loadFeishu(); if (typeof loadProjectLibraries === "function") await loadProjectLibraries();
+      } catch (error) {
+        status.textContent = "保存失败：" + error.message;
+        status.className = "msg err";
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    let cloudPollId = "", cloudJob = null;
+    const cloudOperations = {deploy: "部署 / 更新", repair: "修复 / 重装", check: "检查状态", uninstall: "卸载", retry: "重试连接"};
+    function cloudBusy(busy) {
+      for (const id of ["connect_cloud", "cloud_check", "cloud_repair", "cloud_uninstall", "cloud_retry_worker"]) $(id).disabled = busy;
+    }
+    function newerVersion(candidate, current) {
+      const parse = value => String(value || "").trim().match(/^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/i);
+      const a = parse(candidate), b = parse(current);
+      if (!a || !b) return false;
+      for (let i = 1; i <= 3; i++) {
+        const diff = Number(a[i] || 0) - Number(b[i] || 0);
+        if (diff) return diff > 0;
+      }
+      return false;
+    }
+    function renderCloudVersion() {
+      const notice = $("cloud_new_version");
+      notice.hidden = true;
+      notice.textContent = "";
+      if (!cloudJob) return;
+      const finished = ["done", "error", "partial", "interrupted"].includes(cloudJob.stage);
+      const removed = cloudJob.operation === "uninstall" && cloudJob.stage === "done";
+      const current = removed ? "" : cloudJob.remote_status?.version;
+      $("cloud_job_target").textContent = `服务器：${cloudJob.host} · ${cloudOperations[cloudJob.operation] || "部署"} · 云端当前版本 ${removed ? "未部署" : current ? versionLabel(current) : finished ? "未知" : "读取中…"}`;
+      const latest = newerVersion(latestRelease?.version, localAppVersion) ? latestRelease.version : localAppVersion;
+      if (!newerVersion(latest, current)) return;
+      notice.textContent = ` · 可更新版本 ${versionLabel(latest)}${newerVersion(latest, localAppVersion) ? "（请先更新本机小A，再更新云端）" : "（点击“部署 / 更新云端”）"}`;
+      notice.hidden = false;
+    }
+    function renderCloudJob(job) {
+      if (!job) return;
+      cloudJob = job;
+      const finished = ["done", "error", "partial", "interrupted"].includes(job.stage);
+      cloudBusy(!finished);
+      $("cloud_deploy_status").textContent = job.message || "正在处理…";
+      $("cloud_deploy_status").className = "msg" + (job.stage === "done" ? " ok" : ["error", "partial", "interrupted"].includes(job.stage) ? " err" : "");
+      const remote = job.remote_status || {};
+      renderCloudVersion();
+      if (job.operation === "check" && finished && !remote.healthy) $("cloud_deploy_status").className = "msg err";
+      if (remote.port) $("connection_preview").textContent = `云端端口：${remote.port} · ${remote.active ? "服务运行中" : "服务未运行"} · ${remote.healthy ? "健康检查通过" : "健康检查未通过"}${remote.transaction_pending ? " · 有未完成回退点，请修复" : ""}`;
+      const symbols = {pending: "○", running: "●", done: "✓", error: "×", warning: "!", skipped: "—"};
+      const labels = {pending: "未开始", running: "进行中", done: "已完成", error: "失败", warning: "待处理", skipped: "本次不执行"};
+      const steps = job.steps || [];
+      for (let i = 0; i < 6; i++) {
+        const step = steps[i]; if (!step) continue;
+        const row = $("cloud_step_" + i);
+        row.dataset.state = step.state;
+        row.children[0].textContent = symbols[step.state] || "○";
+        const elapsed = step.started_at ? Math.max(0, Math.round(((step.finished_at || Date.now() / 1000) - step.started_at))) : 0;
+        row.children[1].textContent = `${i + 1}. ${step.title} · ${labels[step.state] || "未开始"}${elapsed ? ` · ${elapsed}秒` : ""}`;
+      }
+      const completed = steps.filter(step => step.state === "done").length;
+      const skipped = steps.filter(step => step.state === "skipped").length;
+      $("cloud_overall_progress").max = Math.max(1, 6 - skipped);
+      $("cloud_overall_progress").value = completed;
+      $("cloud_step_progress").textContent = `已完成 ${completed}/${6 - skipped} 个执行步骤${skipped ? `（另 ${skipped} 步本次不执行）` : ""} · ${job.message || ""}`;
+      $("cloud_upload_row").hidden = !job.total_bytes;
+      $("cloud_upload_progress").value = job.total_bytes ? Math.min(100, (job.uploaded_bytes || 0) * 100 / job.total_bytes) : 0;
+      $("cloud_retry_worker").hidden = !(finished && (job.cloud_ready || job.stage === "interrupted") && ["deploy", "repair", "retry"].includes(job.operation));
+      $("cloud_deploy_logs").dataset.i18nEmpty = String(!(job.logs || []).length);
+      const translateCloudLog = window.XiaoALanguage?.translateCloudLog;
+      $("cloud_deploy_logs").textContent = (job.logs || []).map(log => {
+        const line = `[${new Date(log.time * 1000).toLocaleTimeString()}] ${log.message}`;
+        return translateCloudLog ? translateCloudLog(line) : line;
+      }).join("\n") || "尚无部署日志";
+      if (job.connection && job.connection.host) {
+        $("connection_preview").textContent = `云端：${job.connection.host}:${job.connection.port}（请放行安全组此端口）`;
+      }
+      if (finished) $("cloud_last_result").textContent = `最近操作：${cloudOperations[job.operation] || "部署"} · ${new Date((job.finished_at || job.updated_at) * 1000).toLocaleString()} · ${job.message}`;
+    }
+    window.addEventListener("xiaoa-ui-language-changed", () => {
+      if (cloudJob) renderCloudJob(cloudJob);
+    });
+    async function pollCloudDeploy(jobId) {
+      if (cloudPollId === jobId) return;
+      cloudPollId = jobId;
+      cloudBusy(true);
+      while (cloudPollId === jobId) {
+        try {
+          const response = await fetch(API + "/api/cloud/deploy/" + encodeURIComponent(jobId));
+          const result = await response.json();
+          if (response.status === 404) {
+            cloudPollId = "";
+            await restoreCloudDeploy();
+            return;
+          }
+          if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+          renderCloudJob(result);
+          if (["done", "error", "partial", "interrupted"].includes(result.stage)) {
+            cloudPollId = "";
+            if (result.cloud_ready || result.operation === "uninstall" && result.stage === "done") load().catch(() => {});
+            return;
+          }
+        } catch (error) {
+          // The backend continues working; a temporary network error must not allow a second deploy.
+          $("cloud_deploy_status").textContent = "暂时无法读取进度，正在重新连接；后台任务不会因此停止";
+          cloudBusy(true);
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    async function restoreCloudDeploy() {
+      if (runtimeIsHub) return;
+      try {
+        const response = await fetch(API + "/api/cloud/deploy/latest");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (result.previous) $("cloud_last_result").textContent = `上次操作：${new Date(result.previous.updated_at * 1000).toLocaleString()} · ${result.previous.message}`;
+        if (result.job) {
+          $("cloud_host").value = result.job.host;
+          $("cloud_username").value = result.job.username || "root";
+          renderCloudJob(result.job);
+          if (!["done", "error", "partial", "interrupted"].includes(result.job.stage)) pollCloudDeploy(result.job.job_id);
+        } else cloudBusy(false);
+      } catch (error) {
+        $("cloud_deploy_status").textContent = "部署记录暂时不可读取，正在重试…";
+        cloudBusy(true);
+        setTimeout(restoreCloudDeploy, 3000);
+      }
+    }
+
+    function cloudFeishuCredentials({requireSecret = false} = {}) {
+      const appId = $("fs_app_id").value.trim();
+      const appSecret = $("fs_app_secret").value.trim();
+      if (appSecret && !appId) throw new Error("填写 App Secret 时也需要填写 App ID");
+      if (!appSecret && appId && (requireSecret || appId !== feishuInitialAppId)) {
+        throw new Error("填写或更换 App ID 时，请同时填写对应的 App Secret");
+      }
+      return {
+        appId: appSecret ? appId : "",
+        appSecret,
+      };
+    }
+
+    async function startCloudOperation(operation = "deploy") {
+      const status = $("cloud_deploy_status");
+      const host = operation === "retry" && cloudJob ? cloudJob.host : $("cloud_host").value.trim();
+      const username = operation === "retry" && cloudJob ? cloudJob.username : $("cloud_username").value.trim() || "root";
+      if (!host) { status.textContent = "请填写公网 IP"; status.className = "msg err"; return; }
+      let feishuCredentials = {appId: "", appSecret: ""}, confirmation = "", purgeConfirmation = "";
+      let operationPassword = operation === "uninstall" ? "" : $("cloud_password").value;
+      try {
+        if (["deploy", "repair"].includes(operation)) feishuCredentials = cloudFeishuCredentials();
+        if (operation === "repair" && !await settingsConfirm(`修复 / 重装 ${host}？将短暂重启小A云端服务，保留配置、数据和证书。`, {title: "修复 / 重装云端小A"})) return;
+        if (operation === "uninstall") {
+          operationPassword = await settingsPrompt(`请输入服务器 ${host} 的远程密码（SSH），用于验证卸载身份`, {
+            title: "卸载云端小A",
+            inputType: "password",
+            inputLabel: "远程密码（SSH）",
+            inputPlaceholder: "请输入服务器密码",
+            confirmLabel: "继续",
+            danger: true,
+          });
+          if (!operationPassword) return;
+          if (!await settingsConfirm(`确认卸载服务器 ${host} 上的小A？默认保留数据；其他服务不受影响。`, {
+            title: "确认卸载云端小A",
+            confirmLabel: "确认卸载",
+            danger: true,
+          })) return;
+          confirmation = "remote_password";
+          if ($("cloud_purge").checked) {
+            purgeConfirmation = await settingsPrompt(`危险：将永久删除服务器 ${host} 上的小A配置、数据、记忆、飞书记录和证书！
+请输入：删除数据 ${host}`, {
+              title: "确认永久删除云端数据",
+              inputLabel: "输入确认文字",
+              inputPlaceholder: `删除数据 ${host}`,
+              confirmLabel: "确认删除",
+              danger: true,
+            }) || "";
+            if (purgeConfirmation !== `删除数据 ${host}`) return;
+          }
+        }
+      } catch (error) { status.textContent = error.message; status.className = "msg err"; return; }
+      cloudBusy(true);
+      status.textContent = "正在提交云端操作…"; status.className = "msg";
+      try {
+        const response = await fetch(API + "/api/cloud/deploy", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({host, username, password: operationPassword,
+            operation, confirmation,
+            purge_data: operation === "uninstall" && $("cloud_purge").checked,
+            purge_confirmation: purgeConfirmation, worker_id: $("worker_id").value.trim(),
+            feishu_app_id: feishuCredentials.appId, feishu_app_secret: feishuCredentials.appSecret,
+            feishu_allowed_open_ids: feishuAllowedIds.join(", "),
+          }),
+        });
+        const result = await response.json();
+        operationPassword = "";
+        $("cloud_password").value = "";
+        if (!response.ok || !result.ok) {
+          status.textContent = result.detail || result.error || `HTTP ${response.status}`;
+          status.className = "msg err";
+          if (result.active_job_id) pollCloudDeploy(result.active_job_id);
+          else cloudBusy(false);
+          return;
+        }
+        if (feishuCredentials.appSecret) $("fs_app_secret").value = "";
+        pollCloudDeploy(result.job_id);
+      } catch (error) {
+        // POST may have arrived even if its response was lost; discover the existing job first.
+        operationPassword = "";
+        $("cloud_password").value = "";
+        await restoreCloudDeploy();
+      }
+    }
+    $("connect_cloud").onclick = () => startCloudOperation("deploy");
+    $("cloud_check").onclick = () => startCloudOperation("check");
+    $("cloud_repair").onclick = () => startCloudOperation("repair");
+    $("cloud_uninstall").onclick = () => startCloudOperation("uninstall");
+    $("cloud_retry_worker").onclick = () => startCloudOperation("retry");
+
+    $("feishu_logout").onclick = () => logoutFeishu();
+
+    $("preview_voice").onclick = async () => {
+      const button = $("preview_voice");
+      const status = $("voice_preview_status");
+      if (!$("tc_secret_id").value.trim() || !$("tc_secret_key").value.trim()) {
+        status.textContent = "腾讯云还没配 SecretId / SecretKey，先填写再试听";
+        status.className = "msg err";
+        return;
+      }
+      if (previewAudio) previewAudio.pause();
+      button.disabled = true;
+      status.textContent = "正在生成试听…";
+      status.className = "msg";
+      try {
+        const voice = $("tts_voice").value;
+        const response = await fetch(`${API}/api/tts/preview?voice=${encodeURIComponent(voice)}&t=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try {
+            const body = await response.json();
+            detail = body.detail || body.error || detail;
+          } catch (_) {}
+          throw new Error(detail);
+        }
+        const blob = await response.blob();
+        if (!blob.type.startsWith("audio/")) throw new Error("服务器返回的不是音频");
+        previewAudio = new Audio(URL.createObjectURL(blob));
+        previewAudio.preload = "auto";
+        await previewAudio.play();
+        status.textContent = "正在试听";
+        status.className = "msg ok";
+        previewAudio.onended = () => { status.textContent = "试听完成"; };
+      } catch (error) {
+        status.textContent = "试听失败：" + error.message;
+        status.className = "msg err";
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    $("backup_now").onclick = async () => {
+      const status = $("backup_status");
+      status.textContent = "备份中…";
+      status.className = "msg";
+      try {
+        const response = await fetch(API + "/api/memory/backup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            directory: $("memory_backup_dir").value,
+            interval_minutes: Number($("memory_backup_interval").value || 60),
+            keep_count: Number($("memory_backup_keep").value || 30),
+          }),
+        });
+        const result = await response.json();
+        if (result.ok) {
+          status.textContent = "备份成功";
+          status.className = "msg ok";
+          $("memory_backup_resolved").textContent = result.dir || "";
+        } else {
+          status.textContent = "备份失败：" + (result.error || "未知错误");
+          status.className = "msg err";
+        }
+      } catch (error) {
+        status.textContent = "备份失败：" + error.message;
+        status.className = "msg err";
+      }
+    };
+
+    $("refresh_audit").onclick = () => loadAudit().catch(error => {
+      $("audit_summary").textContent = "读取失败：" + error.message;
+    });
+    $("audit_category").onchange = $("refresh_audit").onclick;
+    $("audit_status").onchange = $("refresh_audit").onclick;
+    $("export_audit").onclick = async () => {
+      const params = new URLSearchParams();
+      if ($("audit_category").value) params.set("category", $("audit_category").value);
+      if ($("audit_status").value) params.set("status", $("audit_status").value);
+      const response = await fetch(API + "/api/audit/export?" + params);
+      const result = await response.json();
+      if (!response.ok || result.ok === false) {
+        $("audit_summary").textContent = "导出失败：" + (result.error || response.status);
+        return;
+      }
+      const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], {type: "application/json"}));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `xiaoa-operation-log-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
+    // 远程遥控锁定:查状态 + 本机解锁
+    async function loadChannelLock() {
+      if (currentPage !== "system" || refreshingChannelLock) return;
+      const statusEl = $("channel_lock_status");
+      const btn = $("channel_unlock_btn");
+      if (!statusEl || !btn) return;
+      btn.disabled = runtimeIsHub;
+      btn.title = runtimeIsHub ? "请在本机小A解除紧急锁定" : "";
+      refreshingChannelLock = true;
+      try {
+        const r = await fetch(API + "/api/channel/status");
+        const d = await r.json();
+        if (d.locked === null) {
+          statusEl.textContent = "云端状态查询失败：" + (d.error || "未知错误");
+          statusEl.style.color = "#c0392b";
+          btn.hidden = false;
+        } else if (d.locked) {
+          statusEl.textContent = "已锁定(远程操作被冻结)";
+          statusEl.style.color = "#c0392b";
+          btn.hidden = false;
+        } else {
+          statusEl.textContent = "正常(未锁定)";
+          statusEl.style.color = "";
+          btn.hidden = true;
+        }
+      } catch (e) {
+        statusEl.textContent = "查询失败:" + e.message;
+      } finally {
+        refreshingChannelLock = false;
+      }
+    }
+    $("channel_unlock_btn").onclick = async () => {
+      const msg = $("channel_unlock_msg");
+      try {
+        const r = await fetch(API + "/api/channel/unlock", { method: "POST" });
+        const d = await r.json();
+        if (d.ok) { msg.textContent = "已解锁 ✓"; msg.className = "msg ok"; }
+        else { msg.textContent = "解锁失败:" + (d.error || ""); msg.className = "msg err"; }
+      } catch (e) { msg.textContent = "解锁失败:" + e.message; msg.className = "msg err"; }
+      loadChannelLock();
+    };
+
+    function scheduleForm() {
+      const schedule = $("sched_schedule").value;
+      const days = Array.from(document.querySelectorAll("#sched_week_row input[type=checkbox]:checked"))
+        .map(input => Number(input.value));
+      if (!scheduleRecipients.length || !$("sched_recipient").value) throw new Error("请先选择定时任务的接收用户");
+      const body = {
+        name: $("sched_name").value,
+        kind: $("sched_kind").value,
+        schedule,
+        time: $("sched_time").value,
+        location: scheduleCloudSelected ? "cloud" : "local",
+        channel: $("sched_channel").value,
+        text: $("sched_text").value,
+        days,
+      };
+      const recipient = scheduleRecipients[Number($("sched_recipient").value) - 1];
+      if ($("sched_recipient").value && recipient) Object.assign(body, {
+        channel_target: recipient.target, channel_account_id: recipient.account_id,
+        channel_receive_id_type: recipient.receive_id_type, channel_user_id: recipient.user_id,
+      });
+      if (schedule === "once") body.datetime = `${$("sched_datetime").value}T${body.time}`;
+      return body;
+    }
+
+    function updateScheduleFormUI() {
+      const schedule = $("sched_schedule").value;
+      $("sched_week_row").hidden = schedule !== "weekly";
+      $("sched_once_row").hidden = schedule !== "once";
+      $("sched_time_label").textContent = schedule === "weekly"
+        ? "\u6267\u884c\u65f6\u95f4\uff08\u6bcf\u5468\uff09"
+        : schedule === "once" ? "\u6267\u884c\u65f6\u95f4\uff08\u4e00\u6b21\u6027\uff09" : "\u6267\u884c\u65f6\u95f4\uff08\u6bcf\u5929\uff09";
+      $("sched_location_status").textContent = scheduleCloudSelected
+        ? "\u4e91\u670d\u52a1\u5668\uff08\u5df2\u914d\u7f6e\u4e91\u7aef\u8fde\u63a5\uff09"
+        : "\u672c\u5730\u7535\u8111\uff08\u672a\u914d\u7f6e\u4e91\u7aef\u8fde\u63a5\uff09";
+    }
+
+    let scheduleRecipients = [];
+    async function loadScheduleRecipients() {
+      const channel = $("sched_channel").value;
+      const select = $("sched_recipient");
+      select.textContent = "";
+      select.append(new Option("正在读取…", ""));
+      select.disabled = true;
+      try {
+        const response = await fetch(API + `/api/schedule/recipients?channel=${encodeURIComponent(channel)}`);
+        const result = await response.json();
+        if (channel !== $("sched_channel").value) return;
+        if (!response.ok || !result.ok) throw new Error(result.error || "读取失败");
+        scheduleRecipients = result.recipients || [];
+        select.textContent = "";
+        select.append(new Option(scheduleRecipients.length ? "请选择接收用户" : "暂无已授权用户", ""));
+        scheduleRecipients.forEach((recipient, index) => {
+          const label = `${recipient.number || index + 1}. ${recipient.remark || "未备注"} · ${maskIdentifier(recipient.target)}` + (recipient.account_id ? ` · 账号 ${maskIdentifier(recipient.account_id)}` : "");
+          const option = new Option(label + (recipient.connected ? "" : "（未连接）"), String(index + 1));
+          option.dataset.i18nEn = `${recipient.number || index + 1}. ${recipient.remark || "No remark"} · ${maskIdentifier(recipient.target)}${recipient.account_id ? ` · Account ${maskIdentifier(recipient.account_id)}` : ""}${recipient.connected ? "" : " (disconnected)"}`;
+          option.title = `${recipient.number || index + 1}. ${recipient.remark || "未备注"} · ${recipient.target}` + (recipient.account_id ? ` · ${recipient.account_id}` : "");
+          option.disabled = !recipient.connected;
+          select.append(option);
+        });
+        if (scheduleRecipients.length === 1 && scheduleRecipients[0].connected) select.value = "1";
+      } catch (error) {
+        scheduleRecipients = [];
+        select.textContent = "";
+        select.append(new Option("读取失败，请重新选择渠道", ""));
+      } finally { select.disabled = false; }
+    }
+    $("sched_channel").onchange = loadScheduleRecipients;
+
+    async function loadSchedule() {
+      await loadScheduleRecipients();
+      const response = await fetch(API + "/api/schedule");
+      const d = await response.json();
+      renderScheduleList(d.tasks || []);
+    }
+
+    function renderScheduleList(tasks) {
+      const list = $("sched_list");
+      list.innerHTML = "";
+      if (!tasks.length) {
+        const empty = document.createElement("div");
+        empty.className = "sched-empty";
+        empty.textContent = "还没有定时任务。";
+        list.appendChild(empty);
+        return;
+      }
+      for (const t of tasks) {
+        const row = document.createElement("div");
+        row.className = "sched-item";
+        const when = t.schedule === "once" ? t.datetime : t.time;
+        const statusLabel = {ok: "成功", blocked: "被拦截", skipped: "已跳过", done: "已完成"};
+        const channelLabel = t.channel === "weixin" ? "\u5fae\u4fe1" : "\u98de\u4e66";
+        let meta = `${t.kind === "execute" ? "\u6267\u884c" : "\u63d0\u9192"} \u00b7 ${t.schedule} \u00b7 ${when} \u00b7 ${t.location === "cloud" ? "\u4e91\u7aef" : "\u672c\u5730"}${` \u00b7 \u53d1\u9001\u5230${channelLabel}`} \u00b7 ${t.enabled ? (t.done ? "\u5df2\u5b8c\u6210" : "\u542f\u7528") : "\u5df2\u505c\u7528"}`;
+        if (t.channel_target) meta += ` · 接收人 ${maskIdentifier(t.channel_target)}`;
+        if (t.last_status && !t.done) {
+          meta += ` · 上次${statusLabel[t.last_status] || t.last_status}`;
+        }
+        const info = document.createElement("div");
+        info.className = "sched-info";
+        const name = document.createElement("div");
+        name.className = "sched-name";
+        name.textContent = t.name || "未命名任务";
+        if (t.name) name.dataset.noI18n = "";
+        const metaEl = document.createElement("div");
+        metaEl.className = "sched-meta";
+        metaEl.textContent = meta;
+        metaEl.dataset.i18nEn = `${t.kind === "execute" ? "Execute" : "Reminder"} · ${t.schedule} · ${when} · ${t.location === "cloud" ? "Cloud" : "Local"} · Send to ${t.channel === "weixin" ? "WeChat" : "Feishu"} · ${t.enabled ? (t.done ? "Completed" : "Enabled") : "Disabled"}${t.channel_target ? ` · Recipient ${maskIdentifier(t.channel_target)}` : ""}${t.last_status && !t.done ? ` · Last: ${{ok:"Succeeded",blocked:"Blocked",skipped:"Skipped",done:"Completed"}[t.last_status] || t.last_status}` : ""}`;
+        info.appendChild(name);
+        info.appendChild(metaEl);
+        if (t.last_message) {
+          const msgEl = document.createElement("div");
+          msgEl.className = "sched-meta";
+          msgEl.style.color = t.last_status === "blocked" ? "#dc2626" : "#6b7280";
+          msgEl.textContent = t.last_message; msgEl.dataset.noI18n = "";
+          info.appendChild(msgEl);
+        }
+        const actions = document.createElement("div");
+        actions.className = "sched-actions";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = t.enabled ? "停用" : "启用";
+        toggle.onclick = async () => {
+          const r = await fetch(API + "/api/schedule/enable", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: t.id, enabled: !t.enabled }),
+          });
+          const d = await r.json();
+          if (d.ok) loadSchedule();
+        };
+        const del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "删除";
+        del.onclick = async () => {
+          const r = await fetch(API + "/api/schedule/" + encodeURIComponent(t.id), { method: "DELETE" });
+          const d = await r.json();
+          if (d.ok) loadSchedule();
+        };
+        actions.appendChild(toggle);
+        actions.appendChild(del);
+        row.appendChild(info);
+        row.appendChild(actions);
+        list.appendChild(row);
+      }
+    }
+
+    $("sched_schedule").onchange = updateScheduleFormUI;
+    $("sched_add").onclick = async () => {
+      const status = $("sched_form_status");
+      if (!settingsLoaded) {
+        status.textContent = "\u6b63\u5728\u8bfb\u53d6\u4e91\u7aef\u8fde\u63a5\u72b6\u6001\uff0c\u8bf7\u7a0d\u540e\u518d\u6dfb\u52a0\u3002";
+        status.className = "msg err";
+        return;
+      }
+      status.textContent = "添加中…"; status.className = "msg";
+      try {
+        const r = await fetch(API + "/api/schedule", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(scheduleForm()),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          status.textContent = "已添加 ✓"; status.className = "msg ok";
+          $("sched_name").value = "";
+          $("sched_text").value = "";
+          loadSchedule();
+        } else {
+          status.textContent = "添加失败：" + (d.error || "未知错误");
+          status.className = "msg err";
+        }
+      } catch (e) {
+        status.textContent = "添加失败：" + e.message;
+        status.className = "msg err";
+      }
+    };
+    updateScheduleFormUI();
+
+
+    selectPage(location.hash.slice(1));
+    cloudBusy(true);
+    load().then(() => {
+      if (!runtimeIsHub) restoreCloudDeploy();
+    }).catch(() => {});
+    loadChannelLock();
+    setInterval(() => loadChannelLock().catch(() => {}), 30000);
+    setInterval(() => loadRecentFeishuOpenId().catch(() => {}), 30000);
+    setInterval(() => refreshIsolationStatus().catch(() => {}), 5000);
+  </script>
+</body>
+</html>

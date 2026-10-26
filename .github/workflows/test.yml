@@ -1,0 +1,67 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # requirements.txt 含 Windows 专用包(pywin32/comtypes/uiautomation 等),
+      # Linux 上装不了。这里只装测试真正需要的跨平台依赖;
+      # 平台相关的测试自己带 skipUnless 守卫。
+      - name: 安装测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install tomli httpx fastapi uvicorn pydantic websockets python-docx openpyxl pillow 'qrcode[pil]>=8.0,<9.0' paramiko tzdata pyflakes pypdf==6.19.0 pymupdf==1.28.2
+
+      # strict 模式禁止因缺依赖跳过整个测试模块;语法错/内部导入拼错同样非 0 退出。
+      # Linux 上预期恰好 10 个 skipped(原 9 项 Windows 专属回归，加 1 项 Windows shell 输出句柄继承回归)。
+      - name: 后端测试
+        timeout-minutes: 10
+        run: |
+          set +e
+          python -u -m backend.run_tests --strict 2>&1 | tee test-output.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+
+      - name: 检查跳过数没有变多
+        run: |
+          skipped=$(grep -oE 'skipped=[0-9]+' test-output.txt | tail -1 | cut -d= -f2)
+          skipped=${skipped:-0}
+          echo "skipped=$skipped"
+          if [ "$skipped" -ne 10 ]; then
+            echo "::error::Linux 平台应恰好跳过 10 项,实际为 $skipped。如果确实新增了平台专属测试,请同时更新此处的期望值。"
+            exit 1
+          fi
+
+      # tools/ 目录不被 backend.run_tests 采集,单独静态检查(未定义名/未用变量等),
+      # 防止 cad_doctor.py 这类诊断脚本缺 import 而整段失效、还伪装成环境故障。
+      - name: tools 静态检查
+        run: |
+          python -m pyflakes tools/
+          echo "tools/ 静态检查通过"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      # 统一使用本地检查入口，只跑纯 Node 测试，不需要安装 Electron。
+      - name: 前端检查
+        working-directory: frontend
+        run: npm run check

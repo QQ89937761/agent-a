@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'" />
+  <style>
+    :root { color-scheme: light; --panel: rgba(255,255,255,.96); --ink: #172033; --brand: #2563eb; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
+    .notice { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    .pill { width: calc(100% - 16px); height: 56px; padding: 0 24px; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--ink); background: var(--panel); border: 1px solid rgba(37,99,235,.26); border-radius: 28px; box-shadow: 0 5px 16px rgba(20,35,60,.16); font-size: 18px; font-weight: 600; letter-spacing: .1px; white-space: nowrap; }
+    .dot { width: 10px; height: 10px; flex: 0 0 10px; background: var(--brand); border-radius: 50%; }
+  </style>
+</head>
+<body>
+  <div class="notice"><div class="pill"><span class="dot"></span><span>小A正在接管电脑 · 按 Esc 交还控制</span></div></div>
+  <script src="./ui-language.js"></script>
+</body>
+</html>

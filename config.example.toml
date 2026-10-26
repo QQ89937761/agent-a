@@ -1,0 +1,89 @@
+# 桌面 Agent 配置示例
+# 复制本文件为 config.toml 后填写你的实际配置
+
+[llm]
+# 复用你现有的中转网关(OpenAI 兼容格式)
+# base_url 填到 /v1 这一层,不要带后面的 /chat/completions 或 /responses
+protocol = "openai" # openai / responses / anthropic；不会自动切换协议
+provider_name = "默认接口"
+base_url = "http://127.0.0.1:8080/v1"
+# 推荐用 AGENT_LLM_API_KEY 环境变量；迁移说明见 docs/密钥迁移.md
+api_key = ""
+
+# 对话/推理用的模型(文本为主)
+chat_model = "gpt-4o"
+# 输入框模型菜单按这里的顺序显示；以后增加模型只需继续填写名称
+models = ["gpt-4o"]
+
+# 图片理解与对话统一使用默认接口的第一个模型；模型不支持视觉时会返回能力错误。
+
+# 请求超时(秒)
+timeout = 120
+
+[memory]
+# standalone/worker 放本机;hub 模式下长期记忆放云服务器
+# 数据目录(留空则用 ./data/memory)
+data_dir = ""
+# 本地记忆备份目录；留空默认放在 data/backup
+backup_dir = ""
+# 定时快照间隔与保留份数
+backup_interval_minutes = 60
+backup_keep_count = 30
+# SQLite 元数据 + 本地向量检索
+vector_backend = "sqlite"
+# 本地 FastEmbed 模型,数据不发给网关
+embed_model = "BAAI/bge-small-zh-v1.5"
+# 启动后自动增量刷新这些项目目录;也可让小A用 project_index 临时添加
+project_roots = []
+max_project_files = 5000
+
+# 私有云加密备份(留空则不启用,MVP 阶段可先不填)
+[memory.cloud_backup]
+enabled = false
+# 你的私有云 / 对象存储 endpoint(S3 兼容)
+endpoint = ""
+bucket = ""
+access_key = ""
+secret_key = ""
+
+[server]
+host = "127.0.0.1"
+port = 1985
+
+[agent]
+# 单段预算,不是任务总步数上限:有进展会自动续跑,只有真失控(累计到
+# max(500, 10×max_steps))才会硬停。别为了"省 token"把这个调小——调小了只是
+# 让任务多续几段,并不会让它更安全,还会显得卡。
+max_steps = 200
+# 是否对危险/不可逆动作要求确认;普通文件和工具操作不反复打扰
+confirm_before_action = true
+max_history_messages = 20
+# 当前对话模型的上下文窗口(token);单轮达到 75% 时自动压缩旧工具结果
+context_window = 128000
+open_at_login = false
+# 过程文件/临时缓存隔离区上限(MB),超出后按旧文件优先清理
+isolation_max_mb = 1024
+
+[voice]
+provider = ""
+secret_id = ""
+secret_key = ""
+region = "ap-guangzhou"
+tts_voice = 101016
+tts_speed = 0
+
+[feishu]
+app_id = ""
+app_secret = ""
+# 只允许这些 open_id 通过飞书遥控;留空表示兼容旧行为(建议云端填上)
+allowed_open_ids = []
+
+[auth]
+password = ""
+
+[role]
+mode = "standalone"
+hub_url = ""
+hub_token = ""
+worker_id = ""
+tls_fingerprint = ""

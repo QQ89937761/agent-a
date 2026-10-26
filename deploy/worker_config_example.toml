@@ -1,0 +1,16 @@
+# 你电脑(worker)端的配置示例。
+# 把这段加到 D:\Agent-XiaoA\config.toml 里(或改现有的 [role] 段),
+# 电脑就会开机后自动连云端 hub,听它派活操作软件。
+#
+# 云端(hub)不用配这个 [role],它用服务器上的环境变量 AGENT_ROLE=hub。
+
+[role]
+mode = "worker"
+# 公网必须走 TLS,路径固定 /worker
+hub_url = "wss://xiaoa.example.com/worker"
+# 和云端 AGENT_HUB_TOKEN 一模一样的口令
+hub_token = "和云端一致的复杂口令"
+# 用于云端状态页区分这台电脑;留空会自动使用 Windows 电脑名
+worker_id = "office-pc"
+# 受信任 IP / 域名证书均留空：每次连接验证 CA、地址和有效期，兼容自动续期
+tls_fingerprint = ""

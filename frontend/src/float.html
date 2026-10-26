@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'" />
+  <style>
+    :root { color-scheme: light; --font-ui: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
+    html, body {
+      margin: 0; width: 88px; height: 88px; overflow: hidden;
+      background: transparent; -webkit-user-select: none; user-select: none; font-family: var(--font-ui);
+    }
+    /* 整个球体 */
+    .ball {
+      width: 88px; height: 88px; position: relative;
+      cursor: default;
+    }
+    .avatar { cursor: grab; }
+    .avatar:active { cursor: grabbing; }
+    .avatar {
+      position: absolute; inset: 12px;
+      border-radius: 50%;
+      background: #2563eb;
+      box-shadow: 0 4px 12px rgba(37,99,235,.35);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 49px; line-height: 1; font-weight: 700; letter-spacing: 0;
+      transition: transform .15s;
+    }
+    .avatar > span { transform: translateY(-0.08em); }
+    .avatar:hover { transform: scale(1.03); }
+    .avatar:active { transform: scale(.95); }
+    .avatar.alert { animation: alert-flash var(--alert-speed) steps(1, end) infinite; }
+    .ring.alert { animation: alert-ring var(--alert-speed) steps(1, end) infinite; }
+    .alert-approval { --alert-primary: #FF2D2D; --alert-secondary: #FFD400; --alert-speed: .4s; }
+    .alert-complete { --alert-primary: #0A84FF; --alert-secondary: #7DF9FF; --alert-speed: .7s; }
+    .alert-incoming { --alert-primary: #00E676; --alert-secondary: #EEFF41; --alert-speed: .7s; }
+    @keyframes alert-flash {
+      0%, 49% { background: var(--alert-primary); box-shadow: inset 0 0 12px var(--alert-primary); }
+      50%, 100% { background: var(--alert-secondary); box-shadow: inset 0 0 12px var(--alert-secondary); }
+    }
+    @keyframes alert-ring {
+      0%, 49% { border-color: var(--alert-primary); box-shadow: inset 0 0 12px var(--alert-primary); opacity: 1; }
+      50%, 100% { border-color: var(--alert-secondary); box-shadow: inset 0 0 12px var(--alert-secondary); opacity: 1; }
+    }
+    /* 呼吸光圈,显得"活着" */
+    .ring {
+      position: absolute; inset: 10px; border-radius: 50%;
+      border: 3px solid rgba(47,111,237,.72);
+      box-shadow: inset 0 0 6px rgba(47,111,237,.42);
+      animation: breathe 2.4s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes breathe {
+      0%,100% { transform: scale(.85); opacity: .5; }
+      50% { transform: scale(1); opacity: .95; }
+    }
+    /* 向外扩散的波纹:静止态完全不可见,只在 .alert 下动画。
+       从 avatar 边缘 64px 起,scale 到 84px 结束(86-2 留余量)。 */
+    .ripple {
+      position: absolute; inset: 12px; border-radius: 50%;
+      border: 2px solid var(--alert-primary);
+      opacity: 0; pointer-events: none;
+    }
+    .ripple.alert {
+      animation: ripple-out var(--alert-speed) ease-out infinite;
+    }
+    .ripple-2.alert { animation-delay: calc(var(--alert-speed) / -3); }
+    .ripple-3.alert { animation-delay: calc(var(--alert-speed) * -2 / 3); }
+    @keyframes ripple-out {
+      0% { transform: scale(1); opacity: .8; }
+      100% { transform: scale(1.3125); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="ball">
+    <div class="ring"></div>
+    <div class="ripple ripple-1"></div>
+    <div class="ripple ripple-2"></div>
+    <div class="ripple ripple-3"></div>
+    <div class="avatar" id="avatar" title="点我对话,拖动可移动"><span>a</span></div>
+  </div>
+  <script src="./ui-language.js"></script>
+  <script>
+    // 手动拖动:轻点(几乎没动)= 打开/收起对话;按住移动 = 拖动悬浮球
+    const avatar = document.getElementById("avatar");
+    const ring = document.querySelector(".ring");
+    let dragging = false, moved = 0, lastX = 0, lastY = 0;
+
+    function setAlert(data) {
+      const active = Boolean(data && data.active);
+      const ripples = document.querySelectorAll(".ripple");
+      for (const kind of ["approval", "complete", "incoming"]) {
+        avatar.classList.toggle(`alert-${kind}`, active && data.kind === kind);
+        ring.classList.toggle(`alert-${kind}`, active && data.kind === kind);
+        ripples.forEach(r => r.classList.toggle(`alert-${kind}`, active && data.kind === kind));
+      }
+      avatar.classList.toggle("alert", active);
+      ring.classList.toggle("alert", active);
+      ripples.forEach(r => r.classList.toggle("alert", active));
+    }
+
+    if (window.bridge && window.bridge.onFloatAlert) {
+      window.bridge.onFloatAlert(setAlert);
+    }
+    avatar.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      dragging = true; moved = 0;
+      avatar.setPointerCapture(e.pointerId);
+      if (window.bridge) window.bridge.clearFloatAlert();
+      lastX = e.screenX; lastY = e.screenY;
+      e.preventDefault();
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const dx = e.screenX - lastX, dy = e.screenY - lastY;
+      if (dx !== 0 || dy !== 0) {
+        moved += Math.abs(dx) + Math.abs(dy);
+        lastX = e.screenX; lastY = e.screenY;
+        if (window.bridge) window.bridge.dragBy(dx, dy);
+      }
+    });
+    window.addEventListener("pointerup", (e) => {
+      if (!dragging) return;
+      dragging = false;
+      // 移动很小视为"点击" -> 开/收对话面板
+      if (moved < 6 && window.bridge) window.bridge.toggleChat();
+    });
+    window.addEventListener("pointercancel", () => {
+      if (!dragging) return;
+      dragging = false;
+    });
+    window.addEventListener("blur", () => {
+      if (!dragging) return;
+      dragging = false;
+      moved = 0;
+    });
+  </script>
+</body>
+</html>
