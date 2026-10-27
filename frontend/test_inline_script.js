@@ -341,9 +341,9 @@ if (!html.includes("有有效断点时，可在任务卡内继续；也可以补
   throw new Error("stopped task resume guidance missing");
 }
 if (!html.includes("showContinue(d.reason, d.summary)") ||
-    !html.includes('context_limit: "上下文已接近模型窗口上限"') ||
+    !html.includes('context_limit: "上下文已接近模型窗口上限，进度已保存"') ||
     !html.includes('spinning: "检测到连续重复操作，已停止防止原地打转"') ||
-    !html.includes('reason === "context_exhausted"') ||
+    html.includes('if (reason === "context_exhausted")') ||
     html.includes('这个任务做了 <b>${Number(stepsDone)')) {
   throw new Error("agent stop reasons are not presented separately");
 }

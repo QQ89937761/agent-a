@@ -180,7 +180,7 @@ class DeferredConversationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_inputs_never_create_records(self):
         await self.connect()
-        for text in ("", "   ", "继续"):
+        for text in ("", "   "):
             await self.input(text=text)
             await self.socket.event("error")
             self.assertNotIn("conv_draft", self.conversations)
@@ -189,6 +189,14 @@ class DeferredConversationTests(unittest.IsolatedAsyncioTestCase):
             await self.socket.event("error")
         self.assertFalse(self.path.exists())
         self.assertEqual([], self.calls)
+
+    async def test_continue_in_empty_draft_is_a_normal_follow_up(self):
+        await self.connect()
+        await self.input(text="继续")
+        await self.completed()
+        self.assertEqual(1, len(self.calls))
+        self.assertEqual("继续", self.calls[0][0])
+        self.assertIn("conv_draft", self.conversations)
 
     async def test_unknown_id_is_not_redirected_to_old_conversation(self):
         await self.connect()

@@ -47,7 +47,6 @@ _COMPACT_ESCALATION_LEVELS = [
     (0, 40, 20),
 ]
 TOOL_RESULT_OFFLOAD_CHARS = 6000
-TOOL_RESULT_REF_TTL_SECONDS = 24 * 3600
 _RESULT_REF_TOOL = "agent_read_result_ref"
 _RESULT_REF_SCHEMA = {
     "type": "function",
@@ -542,8 +541,9 @@ def _context_exhausted_message(messages: list[dict[str, Any]]) -> str:
         return (
             f"这几张图太大（共 {mb:.1f} MB），超出了模型一次能看的上限。"
             "我已经自动压缩过，还是太大的话可以只发关键区域的截图。"
+            "任务进度已保留，也可以切换到更大上下文窗口的模型后继续。"
         )
-    return "这轮对话太长了，你说过的话本身已经超出模型窗口，压缩帮不上。请开一个新对话，小A会把刚才的任务进度带过去。"
+    return "这轮对话太长了，你说过的话本身已经超出当前模型窗口，压缩后仍放不下。任务进度已保留，请切换到更大上下文窗口的模型后继续。"
 
 
 def compact_context_messages(
@@ -669,22 +669,6 @@ def compact_for_limit(
         if len(next_candidate) == len(candidate):
             return candidate, compacted, False  # 丢无可丢,仍超线
         candidate = next_candidate
-
-
-def cleanup_result_refs(root: Path, now: float | None = None) -> int:
-    """Remove expired offloaded tool results so the data directory stays bounded."""
-    if not root.exists():
-        return 0
-    cutoff = (time.time() if now is None else now) - TOOL_RESULT_REF_TTL_SECONDS
-    removed = 0
-    for path in root.glob("*.txt"):
-        try:
-            if path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed += 1
-        except OSError:
-            continue
-    return removed
 
 
 def _operation_blob(name: str, args: dict[str, Any]) -> str:
@@ -971,7 +955,28 @@ class Agent:
         self.memory = memory
         self.skill_prompt_fn = skill_prompt_fn
         self.runtime_context = runtime_context.strip()
-        self.result_dir = result_dir or isolation_workspace.temporary() / "agent-results"
+        # The resume JSON can survive process restarts, so referenced results
+        # must live beside it rather than in the disposable isolation temp.
+        self.result_dir = result_dir if result_dir is not None else app_home() / "data" / "agent-results"
+        self._legacy_results = result_dir is None
+        # Keep the live model context available to the API cancellation fallback.
+        # A task can be cancelled while an LLM stream is awaiting I/O, before an
+        # ``aborted`` event can be yielded.
+        self._active_messages: list[dict[str, Any]] = []
+        self._seeded_for_run = False
+
+    def resume_messages(self) -> list[dict[str, Any]]:
+        """Return a gateway-valid snapshot of the current task context."""
+        return _complete_tool_pairs(self._active_messages)
+
+    def seed_resume_messages(self, messages: list[dict[str, Any]]) -> None:
+        """Seed a cancellable task before the async generator starts running."""
+        keep = ("role", "content", "tool_calls", "tool_call_id", "name", "_responses_output", "_failover_provider")
+        self._active_messages = _complete_tool_pairs([
+            {key: value for key, value in message.items() if key in keep}
+            for message in messages if isinstance(message, dict)
+        ])
+        self._seeded_for_run = True
 
     def _store_result_ref(self, content: str) -> str:
         self.result_dir.mkdir(parents=True, exist_ok=True)
@@ -990,11 +995,12 @@ class Agent:
         if not re.fullmatch(r"[0-9a-f]{12}", value):
             raise ValueError("结果引用格式无效")
         path = self.result_dir / f"{value}.txt"
-        # 兼容升级前仍在有效期内的断点引用；新结果不再写旧目录。
-        if not path.is_file() and self.result_dir == isolation_workspace.temporary() / "agent-results":
-            path = app_home() / "data" / "agent-results" / f"{value}.txt"
+        # Read older temporary references only for the default store; explicit
+        # result directories must not read outside their own storage scope.
+        if not path.is_file() and self._legacy_results:
+            path = isolation_workspace.temporary() / "agent-results" / f"{value}.txt"
         if not path.is_file():
-            raise FileNotFoundError("结果引用已过期或不存在")
+            raise FileNotFoundError("结果引用文件不存在，可能已被手动删除")
         return path.read_text(encoding="utf-8")
 
     def _offload_result(self, content: str) -> tuple[str, str]:
@@ -1034,7 +1040,14 @@ class Agent:
         resume_messages:上次撞步数上限时保存下来的**完整工作上下文**(含工具调用轨迹)。
         传了它就是"接着上次干",从断点精确续做,而不是靠一段文字总结重新理解。
         """
-        cleanup_result_refs(self.result_dir)
+        # Result references are persistent task data, not an expiring cache.
+        # A stop can arrive while memory recall or another initialization await
+        # is in progress. Seed a fresh snapshot before the first await so the
+        # server never has to resume an empty (or previous task's) context.
+        seeded_for_run = self._seeded_for_run
+        self._seeded_for_run = False
+        if not seeded_for_run:
+            self._active_messages = []
         llm_client = llm or self.llm
         financial_request = _looks_financial("user_input", {"text": user_input})
         if resume_messages and not financial_request:
@@ -1090,30 +1103,35 @@ class Agent:
             )
         if resume_messages:
             messages = [dict(message) for message in resume_messages]
-            if messages[0].get("role") == "system" and str(messages[0].get("content") or "").startswith(("你是\"小A\"", "你是“小A”")):
+            if messages and messages[0].get("role") == "system":
                 messages[0] = {"role": "system", "content": system_prompt}
+            else:
+                # A stop during initialization can persist only the seeded
+                # history. Always restore the current system contract before
+                # handing that snapshot to another model.
+                messages.insert(0, {"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": user_content})
         else:
             messages = [{"role": "system", "content": system_prompt}]
 
+            # Keep the task request and conversation history available even if
+            # cancellation happens during long-running memory initialization.
+            _keep = ("role", "content", "tool_calls", "tool_call_id", "name", "_responses_output", "_failover_provider")
+            messages.extend({k: v for k, v in m.items() if k in _keep} for m in (history or []))
+            messages.append({"role": "user", "content": user_content})
+            self._active_messages = messages
+
             # 注入相关的长期记忆
+            recalled = ""
             if self.memory is not None:
                 try:
                     recalled = await self.memory.recall(user_input)
-                    if recalled:
-                        messages.append(
-                            {"role": "system", "content": f"以下是关于用户的相关记忆,供参考:\n{recalled}"}
-                        )
                 except Exception as e:  # 记忆失败不该拖垮主流程
                     yield AgentEvent("error", {"where": "memory.recall", "msg": str(e)})
 
-            if history:
-                # 历史里可能带 ts 等自定义字段(前端显示时间用),发给网关前剔掉,
-                # 否则严格的网关会拒收未知字段。只保留标准对话字段。
-                _keep = ("role", "content", "tool_calls", "tool_call_id", "name", "_responses_output", "_failover_provider")
-                for m in history:
-                    messages.append({k: v for k, v in m.items() if k in _keep})
-            messages.append({"role": "user", "content": user_content})
+            if recalled:
+                messages.insert(1, {"role": "system", "content": f"以下是关于用户的相关记忆,供参考:\n{recalled}"})
+        self._active_messages = messages
 
         recent_calls: list[tuple[str, ...]] = []  # Bounded tool/arguments/outcome fingerprints.
         completed_launches: dict[tuple[str, str], str] = {}
@@ -1221,15 +1239,17 @@ class Agent:
                 messages, compacted, fitted = compact_for_limit(messages, limit)
                 after_tokens = estimate_messages_tokens(messages)
                 if compacted:
+                    self._active_messages = messages
                     yield AgentEvent("context_compacted", {
                         "before_tokens": before_tokens,
                         "after_tokens": after_tokens,
                         "tool_results": compacted,
                     })
                 if not fitted:
-                    # 逐级加压到最紧仍超线(通常是 user 原话本身太大)→ 死局,别再骗"继续"
+                    # 压缩后仍超线：保留上下文，供更大窗口模型继续。
                     stop_reason = "context_exhausted"
                     break
+                self._active_messages = messages
             # 流式:边生成边把文字吐给前端(先出字,主观上快很多);
             # 同时拿到拼好的 tool_calls,决定是继续调工具还是收尾。
             msg: dict[str, Any] = {}
@@ -1315,6 +1335,7 @@ class Agent:
 
             # 有工具调用:先把 assistant 这条(含 tool_calls)放进上下文
             messages.append(msg)
+            self._active_messages = messages
 
             batch_interrupted = False
             for call_index, call in enumerate(tool_calls):
@@ -1387,6 +1408,7 @@ class Agent:
                             "如需切到前台请使用 focus_window,不要再次调用 launch_app。"
                         )
                         messages.append(self._tool_msg(call["id"], result_str))
+                        self._active_messages = _complete_tool_pairs(messages)
                         yield AgentEvent("tool_result", {
                             "name": name, "result": result_str, "ok": True,
                             "duplicate_suppressed": True,
@@ -1403,8 +1425,9 @@ class Agent:
                         and not any(_image_message_source(m.get("content")) == "attachment" for m in messages)
                         and _is_ambiguous_request(user_input)):
                     result_str = "当前只有寒暄或呼唤，没有具体任务；请简短问清目标，不要查看屏幕猜测。"
-                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     messages.append(self._tool_msg(call["id"], result_str))
+                    self._active_messages = _complete_tool_pairs(messages)
+                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     continue
 
                 yield AgentEvent("tool_call", {"name": name, "arguments": args})
@@ -1419,8 +1442,9 @@ class Agent:
                         f"错误:不存在工具 {name}。此操作没有执行；不要重试或伪造这个工具名，"
                         f"{recovery}请只从本轮提供的已注册工具中选择；若没有对应工具，请如实说明暂不支持。"
                     )
-                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     messages.append(self._tool_msg(call["id"], result_str))
+                    self._active_messages = _complete_tool_pairs(messages)
+                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     continue
 
                 # 查询工具与已知预览不因文本/路径命中关键词而被当成执行；未知命令仍保守处理。
@@ -1433,8 +1457,9 @@ class Agent:
                 irreversible = False if read_only_operation else _looks_irreversible(name, risk_args)
                 if irreversible and approval_mode is None:
                     result_str = "已拦下：远程不可执行格式化、关机、改密码、删除注册表等不可逆操作，请在本机亲自操作。"
-                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     messages.append(self._tool_msg(call["id"], result_str))
+                    self._active_messages = _complete_tool_pairs(messages)
+                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                     continue
                 financial = bool(not read_only_operation and tool and tool.side_effect and (
                     (financial_request and name not in _LITERAL_DATA_TOOLS) or _looks_financial(name, risk_args)
@@ -1512,8 +1537,9 @@ class Agent:
                         allowed = approval.allowed
                     if not allowed:
                         result_str = "本次任务未获危险操作授权（已拒绝、中止或未确认），不再重复弹窗；请仅执行无需授权的步骤。"
-                        yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                         messages.append(self._tool_msg(call["id"], result_str))
+                        self._active_messages = _complete_tool_pairs(messages)
+                        yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False})
                         continue
 
                 # 执行
@@ -1523,7 +1549,9 @@ class Agent:
                     return
                 obs_image_b64: str | None = None
                 display_image_b64: str | None = None
+                tool_failed = False
                 terminal_error = ""
+                result: Any = None
                 tool_started = time.perf_counter()
                 try:
                     result = (
@@ -1541,55 +1569,86 @@ class Agent:
                         result_str = self._stringify(result)
                     if name == "launch_app" and _launch_completed(result):
                         completed_launches[signature] = result_str
-                    result_ok = not (isinstance(result, dict) and result.get("ok") is False)
-                    if not result_ok:
-                        logging.getLogger(__name__).warning(
-                            "tool returned failure: name=%s status=%s detail=%s",
-                            name, result.get("status", "unspecified"),
-                            str(result.get("error") or result.get("note") or "")[:500],
-                        )
-                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": result_ok, "tool_ms": max(0, round((time.perf_counter() - tool_started) * 1000))})
                 except asyncio.CancelledError:
                     result_str = "工具执行被用户中止，执行结果未知；继续前请先核对实际状态。"
                     messages.append(self._tool_msg(call["id"], result_str))
+                    self._active_messages = _complete_tool_pairs(messages)
                     yield self._abort_event(messages)
                     yield AgentEvent("done", {"aborted": True})
                     return
                 except Exception as e:
                     logging.getLogger(__name__).exception("tool execution failed: %s", name)
+                    tool_failed = True
                     terminal_error = str(e)
                     result_str = f"工具执行失败: {e}"
-                    yield AgentEvent("tool_result", {"name": name, "result": result_str, "ok": False, "tool_ms": max(0, round((time.perf_counter() - tool_started) * 1000))})
 
+                # Tool adapters also have a legacy string result contract. Keep explicit
+                # failure prefixes red instead of presenting a failed operation as success.
+                explicit_failure = isinstance(result_str, str) and result_str.lstrip().startswith((
+                    "错误", "失败", "工具执行失败", "未找到", "没找到",
+                ))
                 # A changing observation/query is progress. A successful action without an
                 # observation has unknown progress, not proof of a stalled screen.
-                result_ok = not terminal_error and not (
-                    isinstance(result, dict) and (result.get("ok") is False
-                        or result.get("duplicate_suppressed") or result.get("changed") is False
-                        or result.get("verified") is False)
-                ) and not result_str.startswith(("错误", "失败", "工具执行失败", "未找到", "没找到"))
+                # ``ok`` is the execution outcome shown to the user.  ``result_progress``
+                # below is deliberately separate: a successful no-op or an unverified
+                # observation can still be useful evidence without being a red error.
+                result_ok = not tool_failed and not explicit_failure and not (
+                    isinstance(result, dict) and result.get("ok") is False
+                )
+                if not result_ok:
+                    logging.getLogger(__name__).warning(
+                        "tool returned failure: name=%s status=%s detail=%s",
+                        name, result.get("status", "unspecified") if isinstance(result, dict) else "unspecified",
+                        str(result.get("error") or result.get("note") or "")[:500]
+                        if isinstance(result, dict) else result_str[:500],
+                    )
                 # Successful actions alone do not prove stagnation, but unchanged
                 # observations between those actions can establish an A/B cycle.
-                observed = not (tool and tool.side_effect and result_ok and not obs_image_b64)
+                result_progress = result_ok and not (
+                    isinstance(result, dict) and (
+                        result.get("duplicate_suppressed")
+                        or result.get("changed") is False
+                        or result.get("verified") is False
+                    )
+                )
+                observed = not (tool and tool.side_effect and result_progress and not obs_image_b64)
                 # Screenshot file names change on every save; they are not screen progress.
                 outcome = self._stringify({key: value for key, value in metadata.items() if key != "path"}) if obs_image_b64 else result_str
                 remember_outcome(signature, outcome, obs_image_b64, observed=observed)
                 context_result = result_str
                 if not terminal_error and not reads_result_ref:
-                    previous = previous_results.get(signature)
-                    if previous and previous[0] == result_str:
-                        ref = previous[1]
-                        if not ref:
-                            ref = self._store_result_ref(result_str)
+                    try:
+                        previous = previous_results.get(signature)
+                        if previous and previous[0] == result_str:
+                            ref = previous[1]
+                            if not ref:
+                                ref = self._store_result_ref(result_str)
+                                previous_results[signature] = (result_str, ref)
+                            context_result = f"[与前次结果相同，见 ref:{ref}]"
+                        elif len(result_str) > TOOL_RESULT_OFFLOAD_CHARS:
+                            context_result, ref = self._offload_result(result_str)
                             previous_results[signature] = (result_str, ref)
-                        context_result = f"[与前次结果相同，见 ref:{ref}]"
-                    elif len(result_str) > TOOL_RESULT_OFFLOAD_CHARS:
-                        context_result, ref = self._offload_result(result_str)
-                        previous_results[signature] = (result_str, ref)
-                    else:
+                        else:
+                            previous_results[signature] = (result_str, None)
+                    except OSError as exc:
+                        # A result-file failure must not erase a completed tool
+                        # result from the resumable conversation context.
+                        logging.getLogger(__name__).warning(
+                            "result offload failed; keeping inline result: %s", exc,
+                        )
+                        context_result = result_str
                         previous_results[signature] = (result_str, None)
 
                 messages.append(self._tool_msg(call["id"], context_result))
+                # Persist the result before yielding. Stop may cancel the
+                # consumer while it handles this event.
+                self._active_messages = _complete_tool_pairs(messages)
+                yield AgentEvent("tool_result", {
+                    "name": name,
+                    "result": result_str,
+                    "ok": result_ok,
+                    "tool_ms": max(0, round((time.perf_counter() - tool_started) * 1000)),
+                })
 
                 # 若工具返回了截图,作为图片消息注入,让模型下一步能真正"看见"屏幕
                 if display_image_b64:
@@ -1614,6 +1673,7 @@ class Agent:
                     )
 
             messages = _complete_tool_pairs(messages)
+            self._active_messages = messages
             if batch_interrupted or append_interjections():
                 continue
 
@@ -1622,7 +1682,7 @@ class Agent:
         # 而不是像以前那样只剩零散文字、模型不知道进行到哪。
         summary = ""
         if stop_reason == "context_exhausted":
-            # 死局:压缩帮不上,别骗"继续"。跳过 LLM 总结(上下文已超限)。
+            # 当前模型容纳不下时跳过总结；保留进度供切换更大窗口模型后继续。
             # 43.7:超线主因是图片还是文字,措辞要指对方向。
             full = _context_exhausted_message(messages)
         else:
@@ -1667,6 +1727,7 @@ class Agent:
             full = (summary + "\n\n" + tail) if summary else tail
         yield AgentEvent("message_end", {"content": full})
         messages.append({"role": "assistant", "content": full})
+        self._active_messages = messages
         await self._maybe_remember(user_input, full)
         # 把【完整工作上下文】交回上层保存,用户点"继续"时能从断点精确续做
         # (只带回文字轨迹,截图已在过程中被剔除,不占空间)

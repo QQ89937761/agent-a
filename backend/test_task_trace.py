@@ -136,7 +136,7 @@ class TaskTraceTests(unittest.TestCase):
                 self.assertEqual(1, server._cleanup_attachments(remove_all_unreferenced=True))
                 self.assertIsNone(server._saved_attachment_path("../outside.txt"))
 
-    def test_resume_binding_survives_disk_and_expiry_is_checked(self):
+    def test_resume_binding_survives_disk_without_time_expiry(self):
         trace_id = "ab" + "12" * 15
         with tempfile.TemporaryDirectory() as folder, patch.object(server, "_RESUME_PATH", Path(folder) / "resume.json"), patch.object(server, "_RESUME_STATES", {}):
             server._save_resume_state("desktop", [{"role": "user", "content": "task"}], {"task_trace_id": trace_id}, "stopped")
@@ -146,7 +146,7 @@ class TaskTraceTests(unittest.TestCase):
             self.assertTrue(trace["can_resume"])
             server._RESUME_STATES["desktop"]["updated_at"] = 0
             server._refresh_trace_resume(trace, "desktop")
-            self.assertFalse(trace["can_resume"])
+            self.assertTrue(trace["can_resume"])
 
 
     def test_resume_saving_failure_does_not_claim_restart_durability(self):
@@ -389,7 +389,7 @@ class TaskTraceWebSocketTests(unittest.IsolatedAsyncioTestCase):
         await self.connect()
         self.socket.send(type="continue_task", conversation_id="conv_draft", task_trace_id="old-card")
         error = await self.socket.event("error")
-        self.assertIn("不会从头重复", error["msg"])
+        self.assertIn("未从头重复", error["msg"])
         self.assertEqual(1, len(calls))
         self.socket.send(type="continue_task", conversation_id="default", task_trace_id=trace_id)
         await self.socket.event("error")
@@ -427,6 +427,121 @@ class TaskTraceWebSocketTests(unittest.IsolatedAsyncioTestCase):
         await self.connect(); await self.input(); await self.socket.event("input_done")
         self.assertEqual(1, len(self.calls))
         self.assertEqual(2, len(self.conversations["conv_draft"]["messages"]))
+
+    async def test_real_agent_stop_restart_switch_model_resumes_completed_tool(self):
+        from backend.core.agent import Agent
+        from backend.core.tools import Tool, ToolRegistry
+
+        blocked = asyncio.Event()
+        writes = []
+        registry = ToolRegistry()
+
+        async def record_step():
+            writes.append("once")
+            return "步骤已完成，文件已写入"
+
+        registry.register(Tool("record_step", "记录步骤", {"type": "object"}, record_step, side_effect=True))
+
+        class ControlledLLM:
+            def __init__(self):
+                self.turn = 0
+                self.resumed_messages = []
+
+            async def chat_stream_tools(self, messages, **kwargs):
+                if kwargs.get("model") == "switched-model":
+                    self.resumed_messages = messages
+                    yield "done", {"role": "assistant", "content": "接着原进度完成"}
+                    return
+                self.turn += 1
+                if self.turn == 1:
+                    yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "completed-step", "type": "function", "function": {
+                            "name": "record_step", "arguments": "{}",
+                        },
+                    }]}
+                else:
+                    blocked.set()
+                    await asyncio.Future()
+
+        llm = ControlledLLM()
+        self.stack.enter_context(patch.object(server, "Agent", Agent))
+        self.stack.enter_context(patch.object(server, "REGISTRY", registry))
+        self.stack.enter_context(patch.object(server, "_llm_for_provider", return_value=(
+            llm, False, ["demo", "switched-model"], "default")))
+        self.stack.enter_context(patch.object(server, "_model_options", return_value=[
+            {"provider_id": "default", "model": model} for model in ("demo", "switched-model")
+        ]))
+        await self.connect()
+        await self.input(text="执行步骤后继续整理", provider_id="default", model="demo", approval_mode="full")
+        try:
+            await asyncio.wait_for(blocked.wait(), 5)
+        except TimeoutError:
+            self.fail(repr(self.socket.sent))
+        self.socket.send(type="stop", conversation_id="conv_draft")
+        await self.socket.event("stopped")
+        saved = server._RESUME_STATES["desktop:conv_draft"]
+        trace_id = saved["task"]["task_trace_id"]
+        self.assertEqual("stopped", saved["reason"])
+        self.assertTrue(any(m.get("role") == "tool" and "文件已写入" in m.get("content", "")
+                            for m in saved["messages"]))
+        await self.disconnect()
+        # Recreate the in-memory state from disk, as after restarting the app.
+        server._RESUME_STATES.clear()
+        server._RESUME_STATES.update(server._load_resume_states())
+        loaded = server._load_conversations()
+        self.conversations.clear()
+        self.conversations.update(loaded)
+        await self.connect()
+        self.socket.send(type="conversation_model", conversation_id="conv_draft",
+                         provider_id="default", model="switched-model")
+        await self.socket.event("conversation_list")
+        self.socket.send(type="continue_task", conversation_id="conv_draft", task_trace_id=trace_id,
+                         provider_id="default", model="switched-model")
+        await self.completed()
+        self.assertEqual(["once"], writes)
+        self.assertTrue(any(m.get("role") == "tool" and "文件已写入" in m.get("content", "")
+                            for m in llm.resumed_messages))
+        rows = self.conversations["conv_draft"]["messages"]
+        self.assertEqual(2, len(rows))
+        self.assertEqual(trace_id, rows[-1]["task_trace"]["id"])
+        self.assertEqual("completed", rows[-1]["task_trace"]["status"])
+        self.assertEqual("接着原进度完成", rows[-1]["content"])
+        self.assertNotIn("desktop:conv_draft", server._load_resume_states())
+
+    async def test_stop_during_resume_routing_preserves_original_checkpoint(self):
+        from backend.core.agent import Agent
+
+        checkpoint = [{"role": "user", "content": "原任务"},
+                      {"role": "assistant", "tool_calls": [{"id": "saved-step", "type": "function",
+                       "function": {"name": "write", "arguments": "{}"}}]},
+                      {"role": "tool", "tool_call_id": "saved-step", "content": "已完成的步骤"}]
+        self.script([("aborted", {"resume_messages": checkpoint}), ("done", {"aborted": True})])
+        await self.connect(); await self.input(); await self.completed()
+        trace_id = self.conversations["conv_draft"]["messages"][-1]["task_trace"]["id"]
+        await self.disconnect()
+        routing = asyncio.Event()
+
+        async def blocked_route(*args):
+            routing.set()
+            await asyncio.Future()
+
+        self.stack.enter_context(patch.object(server, "Agent", Agent))
+        self.stack.enter_context(patch.object(server, "_prepare_desktop_shared", side_effect=blocked_route))
+        self.stack.enter_context(patch.object(server, "_llm_for_provider", return_value=(
+            None, False, ["demo"], "default")))
+        await self.connect()
+        self.socket.send(type="continue_task", conversation_id="conv_draft", task_trace_id=trace_id)
+        try:
+            await asyncio.wait_for(routing.wait(), 5)
+        except TimeoutError:
+            self.fail(repr(self.socket.sent))
+        self.socket.send(type="stop", conversation_id="conv_draft")
+        await self.socket.event("stopped")
+        self.assertEqual(checkpoint, server._RESUME_STATES["desktop:conv_draft"]["messages"])
+        self.assertEqual(checkpoint, server._load_resume_states()["desktop:conv_draft"]["messages"])
+        trace = self.conversations["conv_draft"]["messages"][-1]["task_trace"]
+        self.assertEqual("stopped", trace["status"])
+        self.assertTrue(trace["can_resume"])
 
     async def test_checkpoint_consumed_between_request_and_start_does_not_restart_task(self):
         self.script([("aborted", {"resume_messages": [{"role": "user", "content": "task"}]}), ("done", {"aborted": True})])

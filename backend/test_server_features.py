@@ -1557,46 +1557,48 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             server._RESUME_STATES.update(old_resume)
             server._RESUME_PATH = old_resume_path
 
-    def test_resume_states_expire_and_are_bounded(self):
+    def test_resume_states_are_durable_and_not_count_bounded(self):
         old_states = server._RESUME_STATES.copy()
         old_path = server._RESUME_PATH
         try:
             with tempfile.TemporaryDirectory(prefix="xiaoa-resume-expiry-") as tmp:
                 server._RESUME_PATH = Path(tmp) / "resume_states.json"
                 server._RESUME_STATES.clear()
-                expired = server._save_resume_state(
-                    "expired", [{"role": "user", "content": "old"}], {}, "stopped",
+                saved = server._save_resume_state(
+                    "old", [{"role": "user", "content": "old"}], {}, "stopped",
                 )
-                expired["updated_at"] = 10
-                with patch.object(
-                    server.time, "time", return_value=10 + server._RESUME_STATE_TTL_SECONDS + 1,
-                ):
-                    refreshed = server._resume_state("expired")
-                self.assertIsNot(expired, refreshed)
-                self.assertIsNone(refreshed["messages"])
-                for index in range(server._MAX_RESUME_STATES + 3):
-                    server._save_resume_state(str(index), [], {}, "stopped")
-                self.assertLessEqual(len(server._RESUME_STATES), server._MAX_RESUME_STATES)
+                saved["updated_at"] = 10
+                refreshed = server._resume_state("old")
+                self.assertEqual([{"role": "user", "content": "old"}], refreshed["messages"])
+                for index in range(35):
+                    server._save_resume_state(str(index), [{"role": "user", "content": str(index)}], {}, "stopped")
+                self.assertEqual(36, len(server._RESUME_STATES))
         finally:
             server._RESUME_STATES.clear()
             server._RESUME_STATES.update(old_states)
             server._RESUME_PATH = old_path
 
-    def test_resume_auto_window_requires_explicit_continue_after_two_hours(self):
+    def test_explicit_resume_is_available_without_an_age_window(self):
         state = {
             "messages": [{"role": "user", "content": "整理报表"}],
             "reason": "stopped", "updated_at": 1000,
         }
         self.assertTrue(server._resume_automatically(
-            state, "今天天气怎么样", now=1000 + server._RESUME_AUTO_WINDOW_SECONDS,
-        ))
-        self.assertFalse(server._resume_automatically(
-            state, "今天天气怎么样", now=1000 + 3 * 3600,
+            state, "继续", now=1000 + 10 * 365 * 24 * 3600,
         ))
         self.assertTrue(server._resume_automatically(
-            state, "继续", now=1000 + 3 * 3600,
+            state, "接着做", now=1000 + 10 * 365 * 24 * 3600,
         ))
-
+        self.assertTrue(server._resume_automatically(
+            state, "补充一个结果", now=1000 + 60,
+        ))
+        self.assertFalse(server._resume_automatically(
+            state, "补充一个结果", now=1000 + 3 * 3600,
+        ))
+        state["reason"] = "service_error"
+        self.assertTrue(server._resume_automatically(state, "继续", now=1000 + 10 * 365 * 24 * 3600))
+        state["reason"] = "completed"
+        self.assertFalse(server._resume_automatically(state, "继续", now=1000))
     def test_resume_persistence_compacts_and_redacts_without_mutating_memory(self):
         old_states = server._RESUME_STATES.copy()
         old_path = server._RESUME_PATH
@@ -1776,7 +1778,7 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             server._RESUME_STATES.update(old_states)
             server._RESUME_PATH = old_path
 
-    async def test_completed_task_clears_old_checkpoint_and_continue_reports_error(self):
+    async def test_completed_task_clears_old_checkpoint_and_continue_is_a_follow_up(self):
         class CaptureAgent:
             calls = []
 
@@ -1839,10 +1841,10 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
 
                 continue_ws = OneMessageWebSocket("继续")
                 await server.ws_endpoint(continue_ws)
-                self.assertEqual(1, len(CaptureAgent.calls))
+                self.assertEqual(2, len(CaptureAgent.calls))
+                self.assertEqual(("继续", None), CaptureAgent.calls[1])
                 errors = [item for item in continue_ws.sent if item.get("type") == "error"]
-                self.assertEqual(1, len(errors))
-                self.assertIn("没有可继续的断点", errors[0]["data"]["msg"])
+                self.assertEqual([], errors)
         finally:
             server._RESUME_STATES.clear()
             server._RESUME_STATES.update(old_states)
@@ -1851,8 +1853,19 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             server._HISTORY_PATH = old_history_path
             server._RESUME_PATH = old_resume_path
 
-    async def test_expired_checkpoint_continue_returns_human_error(self):
-        error_received = asyncio.Event()
+    async def test_old_checkpoint_continue_remains_available(self):
+        completed = asyncio.Event()
+
+        class CaptureAgent:
+            calls = []
+
+            def __init__(self, *_args, **_kwargs):
+                self.memory = None
+
+            async def run(self, text, **kwargs):
+                CaptureAgent.calls.append((text, kwargs.get("resume_messages")))
+                yield SimpleNamespace(type="message_end", data={"content": "已从旧断点继续"})
+                yield SimpleNamespace(type="done", data={})
 
         class FakeWebSocket:
             def __init__(self):
@@ -1867,48 +1880,52 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             async def send_text(self, payload):
                 item = json.loads(payload)
                 self.sent.append(item)
-                if item.get("type") == "error": error_received.set()
+                if item.get("type") == "done": completed.set()
             async def receive_text(self):
                 if not self.received:
                     self.received = True
                     return json.dumps({"type": "user_input", "text": "继续"}, ensure_ascii=False)
-                await asyncio.wait_for(error_received.wait(), 2)
+                await asyncio.wait_for(completed.wait(), 2)
                 raise WebSocketDisconnect()
 
         old_states = server._RESUME_STATES.copy()
         old_path = server._RESUME_PATH
         try:
-            with tempfile.TemporaryDirectory(prefix="xiaoa-resume-expired-ws-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="xiaoa-resume-expired-ws-") as tmp, \
+                 patch.object(server, "Agent", CaptureAgent):
                 server._RESUME_PATH = Path(tmp) / "resume_states.json"
                 server._RESUME_STATES.clear()
                 state = server._save_resume_state(
                     "desktop", [{"role": "user", "content": "old"}], {}, "stopped", "旧任务",
                 )
-                state["updated_at"] = time.time() - server._RESUME_STATE_TTL_SECONDS - 1
+                state["updated_at"] = 0
                 ws = FakeWebSocket()
                 await server.ws_endpoint(ws)
                 errors = [item for item in ws.sent if item.get("type") == "error"]
-                self.assertEqual(1, len(errors))
-                self.assertIn("没有可继续的断点", errors[0]["data"]["msg"])
-                self.assertEqual({}, json.loads(server._RESUME_PATH.read_text(encoding="utf-8")))
+                self.assertFalse(errors)
+                self.assertTrue(any(item.get("type") == "input_ack" for item in ws.sent))
+                self.assertEqual("继续", CaptureAgent.calls[0][0])
+                self.assertEqual([{"role": "user", "content": "old"}], CaptureAgent.calls[0][1])
         finally:
             server._RESUME_STATES.clear()
             server._RESUME_STATES.update(old_states)
             server._RESUME_PATH = old_path
 
-    async def test_websocket_stop_checkpoint_survives_reconnect(self):
+    async def test_websocket_stop_checkpoint_survives_reconnect_and_model_switch(self):
         started = asyncio.Event()
         first_stopped = asyncio.Event()
         resumed = asyncio.Event()
 
         class CheckpointAgent:
             resume_messages = None
+            models = []
 
             def __init__(self, *_args, **kwargs):
                 self.memory = None
                 self.abort_fn = kwargs["abort_fn"]
 
             async def run(self, text, **kwargs):
+                CheckpointAgent.models.append(kwargs.get("model"))
                 if kwargs.get("resume_messages") is None:
                     started.set()
                     while not self.abort_fn():
@@ -1962,7 +1979,9 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             async def receive_text(self):
                 if not self.received:
                     self.received = True
-                    return json.dumps({"type": "continue_task"})
+                    return json.dumps({
+                        "type": "continue_task", "provider_id": "default", "model": "switched-model",
+                    })
                 await asyncio.wait_for(resumed.wait(), 2)
                 raise WebSocketDisconnect()
 
@@ -1973,7 +1992,8 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         old_resume_path = server._RESUME_PATH
         try:
             with tempfile.TemporaryDirectory(prefix="xiaoa-resume-reconnect-") as tmp, \
-                 patch.object(server, "Agent", CheckpointAgent):
+                 patch.object(server, "Agent", CheckpointAgent), \
+                 patch.object(server.CFG.llm, "models", [server.CFG.llm.chat_model, "switched-model"]):
                 server._RESUME_STATES.clear()
                 server.DESKTOP_CONVERSATIONS = {"default": server._new_conversation("default")}
                 server.DESKTOP_HISTORY = server.DESKTOP_CONVERSATIONS["default"]["messages"]
@@ -1981,18 +2001,19 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
                 server._RESUME_PATH = Path(tmp) / "resume_states.json"
                 await server.ws_endpoint(FirstWebSocket())
                 self.assertTrue(server._RESUME_PATH.exists())
-                server._RESUME_STATES["desktop"]["updated_at"] = (
-                    time.time() - server._RESUME_AUTO_WINDOW_SECONDS - 3600
-                )
+                server._RESUME_STATES["desktop"]["updated_at"] = time.time() - 10 * 365 * 24 * 3600
                 server._persist_resume_states()
                 server._RESUME_STATES.clear()
                 server._RESUME_STATES.update(server._load_resume_states())
+                server.DESKTOP_CONVERSATIONS["default"]["model_selection"] = {
+                    "provider_id": "default", "model": "switched-model",
+                }
                 second = SecondWebSocket()
                 await server.ws_endpoint(second)
                 self.assertEqual({}, json.loads(server._RESUME_PATH.read_text(encoding="utf-8")))
             self.assertEqual("原任务", CheckpointAgent.resume_messages[-1]["content"])
             self.assertIn("原任务", CheckpointAgent.resume_messages[0]["content"])
-            self.assertIn("确认相关文件和进程", CheckpointAgent.resume_messages[0]["content"])
+            self.assertEqual([server.CFG.llm.chat_model, "switched-model"], CheckpointAgent.models)
             self.assertTrue(any(item.get("type") == "done" for item in second.sent))
         finally:
             server._RESUME_STATES.clear()
@@ -2671,10 +2692,11 @@ class ContextExhaustedResumeTests(unittest.IsolatedAsyncioTestCase):
             server._COMPLETED_CLIENT_INPUTS.clear()
             server._COMPLETED_CLIENT_INPUTS.update(old_completed)
 
-    async def test_context_exhausted_leaves_no_checkpoint(self):
+    async def test_context_exhausted_leaves_checkpoint(self):
         sent, states = await self._run_truncated("context_exhausted")
-        self.assertEqual({}, states)  # 内存没留断点
-        self.assertFalse(any(item.get("type") == "resume_available" for item in sent))
+        self.assertTrue(states)
+        self.assertEqual("context_exhausted", next(iter(states.values()))["reason"])
+        self.assertTrue(any(item.get("type") == "truncated" for item in sent))
 
     async def test_context_limit_leaves_checkpoint(self):
         sent, states = await self._run_truncated("context_limit")

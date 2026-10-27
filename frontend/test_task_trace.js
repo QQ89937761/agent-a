@@ -24,6 +24,7 @@ const sent = [];
 const raf = [], results = [], intervals = new Set();
 const ctx = vm.createContext({
   Map, Set, Date, Number, Array, log, currentConversationId: "conv_draft", taskBusy: false,
+  selectedProviderId: "default", selectedModel: "demo",
   API: "http://local.test", encodeURIComponent, statusEl: {}, setBusy: value => {ctx.taskBusy = value;},
   ws: {readyState: 1, send: message => sent.push(JSON.parse(message))},
   fetch: async () => ({ok: true, text: async () => "<img src=x onerror=alert(1)>"}),
@@ -156,7 +157,7 @@ console.log("task trace: message handoff, duplicate snapshots, final reply, stop
   update(value);
   assert.equal(card.events.children[0].children[0], view, "live updates preserve the open raw return");
   card.resumeButton.onclick(); card.resumeButton.onclick();
-  assert.deepEqual(sent, [{type: "continue_task", conversation_id: "conv_bound", task_trace_id: "turn"}]);
+  assert.deepEqual(sent, [{type: "continue_task", conversation_id: "conv_bound", task_trace_id: "turn", provider_id: "default", model: "demo"}]);
   assert.equal(card.resumeButton.disabled, true);
   ctx.taskBusy = false;
   update({...value, can_resume: false});

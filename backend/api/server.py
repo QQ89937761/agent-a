@@ -5352,9 +5352,9 @@ _COMPLETED_CLIENT_INPUTS: dict[str, dict[str, float]] = {}
 _CLIENT_INPUT_TTL_SECONDS = 24 * 3600
 _MAX_COMPLETED_CLIENT_INPUTS = 1000
 _RESUME_STATES: dict[str, dict] = {}
+# Ordinary follow-up text is auto-bound only briefly; an explicit "continue"
+# remains valid for the lifetime of the saved checkpoint.
 _RESUME_AUTO_WINDOW_SECONDS = 2 * 3600
-_RESUME_STATE_TTL_SECONDS = 7 * 24 * 3600
-_MAX_RESUME_STATES = 32
 
 
 def _prune_client_inputs(now: float | None = None) -> None:
@@ -5525,7 +5525,6 @@ def _persist_resume_states() -> bool:
 
 
 def _load_resume_states(now: float | None = None) -> dict[str, dict]:
-    current = time.time() if now is None else now
     try:
         raw = json.loads(_RESUME_PATH.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
@@ -5539,10 +5538,7 @@ def _load_resume_states(now: float | None = None) -> dict[str, dict]:
                 updated_at = float(state.get("updated_at", 0))
             except (TypeError, ValueError):
                 continue
-            if (
-                not isinstance(messages, list) or not messages
-                or current - updated_at > _RESUME_STATE_TTL_SECONDS
-            ):
+            if not isinstance(messages, list) or not messages:
                 continue
             # Older builds could persist a list-limit placeholder as one item.
             # Drop that malformed item rather than letting resume crash later.
@@ -5557,10 +5553,9 @@ def _load_resume_states(now: float | None = None) -> dict[str, dict]:
                 "updated_at": updated_at,
                 "from_disk": True,
             }
-        newest = sorted(
-            loaded.items(), key=lambda item: item[1]["updated_at"], reverse=True,
-        )[:_MAX_RESUME_STATES]
-        return dict(newest)
+        # A saved task is user-owned state, not a cache. Its age and the
+        # number of other saved tasks must never make it non-resumable.
+        return loaded
     except FileNotFoundError:
         return {}
     except Exception as exc:
@@ -5568,28 +5563,7 @@ def _load_resume_states(now: float | None = None) -> dict[str, dict]:
         return {}
 
 
-def _prune_resume_states(now: float | None = None, *, persist: bool = True) -> bool:
-    current = time.time() if now is None else now
-    changed = False
-    for scope, state in list(_RESUME_STATES.items()):
-        if current - float(state.get("updated_at", 0)) > _RESUME_STATE_TTL_SECONDS:
-            _RESUME_STATES.pop(scope, None)
-            changed = True
-    overflow = len(_RESUME_STATES) - _MAX_RESUME_STATES
-    if overflow > 0:
-        oldest = sorted(
-            _RESUME_STATES, key=lambda scope: float(_RESUME_STATES[scope].get("updated_at", 0)),
-        )[:overflow]
-        for scope in oldest:
-            _RESUME_STATES.pop(scope, None)
-            changed = True
-    if changed and persist:
-        _persist_resume_states()
-    return changed
-
-
 def _resume_state(scope: str) -> dict:
-    _prune_resume_states()
     return _RESUME_STATES.get(scope) or _empty_resume_state()
 
 
@@ -5597,7 +5571,7 @@ def _refresh_trace_resume(trace: dict, scope: str) -> None:
     state = _resume_state(scope)
     trace["can_resume"] = bool(
         trace.get("status") in {"stopped", "interrupted", "failed", "limited"}
-        and state.get("messages") and state.get("reason") != "context_exhausted"
+        and state.get("messages")
         and (state.get("task") or {}).get("task_trace_id") == trace.get("id")
     )
     trace["resume_persisted"] = trace["can_resume"] and bool(state.get("persisted") or state.get("from_disk"))
@@ -5611,7 +5585,6 @@ def _save_resume_state(
         "summary": summary[:200], "updated_at": time.time(), "from_disk": False,
     }
     _RESUME_STATES[scope] = state
-    _prune_resume_states(persist=False)
     state["persisted"] = _persist_resume_states()
     return state
 
@@ -5622,11 +5595,16 @@ def _delete_resume_state(scope: str) -> None:
 
 
 def _resume_automatically(state: dict, text: str, now: float | None = None) -> bool:
+    reason = str(state.get("reason") or "")
+    if not state.get("messages") or reason in {"", "completed"}:
+        return False
+    # An explicit continuation is a deliberate request, so do not make it
+    # fail merely because the user changed models or waited a long time.
     if _is_continue_request(text):
         return True
     current = time.time() if now is None else now
     age = current - float(state.get("updated_at", 0))
-    return state.get("reason") == "stopped" and age <= _RESUME_AUTO_WINDOW_SECONDS
+    return reason == "stopped" and age <= _RESUME_AUTO_WINDOW_SECONDS
 
 
 def _resume_age_text(seconds: float) -> str:
@@ -5850,7 +5828,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     for conversation_id in list(DESKTOP_CONVERSATIONS):
         state = runtime_for(conversation_id)
         resume_state = _resume_state(state["resume_scope"])
-        if resume_state.get("messages") and resume_state.get("reason") != "context_exhausted":
+        if resume_state.get("messages"):
             await send_ws("resume_available", {"summary": resume_state.get("summary", ""), "task_trace_id": (resume_state.get("task") or {}).get("task_trace_id")}, conversation_id)
 
     async def run_task(state: dict, task: dict, resume: bool = False) -> None:
@@ -5859,7 +5837,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
         agent = state["agent"]
         resume_scope = state["resume_scope"]
         resume_state = _resume_state(resume_scope)
-        if resume and (not resume_state.get("messages") or resume_state.get("reason") == "context_exhausted"
+        if resume and (not resume_state.get("messages")
                        or (task.get("task_trace_id") and task["task_trace_id"] !=
                            (resume_state.get("task") or {}).get("task_trace_id"))):
             # Recheck at execution time: another page may already have consumed the checkpoint.
@@ -5969,6 +5947,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
         state["display_trace"] = trace
 
         persistence_warned = False
+        resume_context_ready = not resume
 
         async def persist_trace() -> None:
             nonlocal persistence_warned
@@ -5987,19 +5966,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
         # 续做:用上次保存的完整上下文(含工具调用轨迹),不是重新理解一段总结
         rm = resume_state["messages"] if resume else None
-        if resume:
-            age = max(0.0, time.time() - float(resume_state.get("updated_at", 0)))
-            if resume_state.get("from_disk") and age > _RESUME_AUTO_WINDOW_SECONDS and rm:
-                summary = str(resume_state.get("summary") or "这个任务")
-                rm = [{
-                    "role": "system",
-                    "content": (
-                        f"以下任务“{summary}”于{_resume_age_text(age)}前中断，现在继续；"
-                        "开始前请先确认相关文件和进程的当前状态。"
-                    ),
-                }, *rm]
-            _delete_resume_state(resume_scope)  # 取出即清,磁盘同步删除
-            resume_state.update({"messages": None, "task": None, "reason": None})
+        # Keep the exact saved message sequence. The tool-pair normalizer already
+        # marks an in-flight side effect as unknown, so no synthetic prompt is needed.
         # 冷启动等待的进度:cad 工具跑在工作线程里,拿不到事件流。这里注入一个回调,
         # 用 run_coroutine_threadsafe 把进度投回主循环、推给前端(用户能看到"已等 N 秒")。
         loop = asyncio.get_running_loop()
@@ -6025,6 +5993,18 @@ async def ws_endpoint(ws: WebSocket) -> None:
         )
         shared_token = _SHARED_TURN.set(None)
         try:
+            # Clear a previous task's live context before any await.  If stop
+            # lands while project routing is still loading, only this request
+            # can be resumed; old conversation/project data cannot leak into it.
+            seed = getattr(agent, "seed_resume_messages", None)
+            if callable(seed):
+                # A continuation must keep the old checkpoint even if Stop
+                # arrives while shared-library routing is still awaiting I/O.
+                # Seeding only the word "继续" would replace the real task
+                # before Agent.run gets a chance to consume it.
+                early_seed = list(rm or [])
+                early_seed.append({"role": "user", "content": text or "请处理我上传的附件。"})
+                seed(early_seed)
             await publish_trace("started")
             # Select the shared library before exposing any ordinary memory tools.
             model_history = await _prepare_desktop_shared(state, text, model_history, local_client)
@@ -6048,6 +6028,17 @@ async def ws_endpoint(ws: WebSocket) -> None:
                  (_SHARED_TURN.get() or {}).get("library_id")], context_window)
             _cap_attachment_image_budget(model_attachments, context_window)
             state["attachments_in_use"] = model_attachments
+            # Seed only after shared-library filtering.  The seed is the
+            # cancellation fallback used before Agent.run reaches its first
+            # await, so it must never contain another project's context.
+            seed_snapshot = list(rm or model_history)
+            seed_snapshot.append({"role": "user", "content": text or "请处理我上传的附件。"})
+            seed = getattr(agent, "seed_resume_messages", None)
+            if callable(seed):
+                seed(seed_snapshot)
+            # From here on the snapshot has passed project routing and can be
+            # safely persisted if cancellation arrives.
+            resume_context_ready = True
             async for ev in agent.run(
                 text,
                 history=model_history,
@@ -6071,15 +6062,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if ev.type == "truncated":
                     task_trace.finish(trace, "limited")
                     reason = ev.data.get("reason", "step_limit")
-                    if reason != "context_exhausted":
-                        # 存下断点(完整上下文留服务端,不发给前端——太大且没必要)。
-                        # context_exhausted 是死局(上下文装不下,无法"继续"),不留断点,
-                        # 否则每次重连都会推 resume_available 弹一次关不掉的框。
-                        resume_state = _save_resume_state(resume_scope, ev.data.get("resume_messages"), {
-                            "text": "继续", "provider_id": provider_id,
-                            "model": model, "approval_mode": approval_mode,
-                            "reasoning_effort": reasoning_effort, "task_trace_id": task_id,
-                        }, reason, str(resume_state.get("summary") or text) if resume else text)
+                    resume_state = _save_resume_state(resume_scope, ev.data.get("resume_messages"), {
+                        "text": "继续", "provider_id": provider_id,
+                        "model": model, "approval_mode": approval_mode,
+                        "reasoning_effort": reasoning_effort, "task_trace_id": task_id,
+                    }, reason, str(resume_state.get("summary") or text) if resume else text)
                     await publish_trace("truncated")
                     await send_ws("truncated", {"steps_done": ev.data.get("steps_done"), "reason": reason, "task_trace_id": task_id}, conversation_id)
                     continue
@@ -6191,7 +6178,24 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 # 连接本身已经断了：不要记成完成，让前端重连后按原 client_id 补发。
                 pass
         finally:
+            # A hard cancellation can interrupt the Agent before its ``aborted``
+            # event reaches this loop (for example while an LLM/tool is awaiting
+            # I/O). Preserve the live context here so Stop remains a pause.
             if trace["status"] in task_trace.ACTIVE_STATUSES:
+                checkpoint_messages = []
+                snapshot = getattr(agent, "resume_messages", None)
+                if callable(snapshot):
+                    try:
+                        checkpoint_messages = snapshot()
+                    except Exception:
+                        checkpoint_messages = []
+                if checkpoint_messages and resume_context_ready:
+                    checkpoint_reason = "stopped" if state["stop"] else "interrupted"
+                    resume_state = _save_resume_state(resume_scope, checkpoint_messages, {
+                        "text": "继续", "provider_id": provider_id,
+                        "model": model, "approval_mode": approval_mode,
+                        "reasoning_effort": reasoning_effort, "task_trace_id": task_id,
+                    }, checkpoint_reason, str(resume_state.get("summary") or text) if resume else text)
                 task_trace.finish(trace, "stopped" if state["stop"] else "interrupted")
                 await persist_trace()
                 try:
@@ -6385,15 +6389,16 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
                 resume_from_input = bound_retry or bool(resume_state["messages"] and _resume_automatically(resume_state, text))
                 resumed_task = resume_state.get("task") or {}
-                attachment_provider_id = (
-                    resumed_task.get("provider_id") if resume_from_input
-                    else str(msg.get("provider_id") or "default").strip()
-                )
-                attachment_model = (
-                    resumed_task.get("model") if resume_from_input
-                    else str(msg.get("model") or "").strip()
-                )
-                if not resume_from_input and attachment_model and not any(
+                conversation_selection = (DESKTOP_CONVERSATIONS.get(conversation_id) or {}).get("model_selection") or {}
+                attachment_provider_id = str(msg.get("provider_id") or "").strip()
+                attachment_model = str(msg.get("model") or "").strip()
+                if resume_from_input and not attachment_model:
+                    attachment_provider_id = str(conversation_selection.get("provider_id") or "").strip()
+                    attachment_model = str(conversation_selection.get("model") or "").strip()
+                if resume_from_input and not attachment_model:
+                    attachment_provider_id = str(resumed_task.get("provider_id") or "default").strip()
+                    attachment_model = str(resumed_task.get("model") or "")
+                if attachment_model and not any(
                     option["provider_id"] == attachment_provider_id and option["model"] == attachment_model
                     for option in _model_options()
                 ):
@@ -6412,11 +6417,6 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
                 if not text and not attachments:
                     await send_ws("error", {"msg": "消息不能为空。", "client_id": client_id}, conversation_id)
-                    continue
-                if not resume_state["messages"] and _is_continue_request(text):
-                    await send_ws("error", {
-                        "msg": "没有可继续的断点；可能已完成或过期，不会从头重复执行。", "client_id": client_id,
-                    }, conversation_id)
                     continue
                 conversation = DESKTOP_CONVERSATIONS.get(conversation_id)
                 if conversation is None:
@@ -6447,8 +6447,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     "client_id": client_id,
                     "text": text,
                     "attachments": attachments,
-                    "provider_id": resumed_task.get("provider_id") if resume_from_input else str(msg.get("provider_id") or "default").strip(),
-                    "model": resumed_task.get("model") if resume_from_input else str(msg.get("model") or "").strip(),
+                    "provider_id": attachment_provider_id,
+                    "model": attachment_model,
                     "approval_mode": resumed_task.get("approval_mode") if resume_from_input else str(msg.get("approval_mode") or "risk"),
                     "reasoning_effort": resumed_task.get("reasoning_effort") if resume_from_input else str(msg.get("reasoning_effort") or "high"),
                     "response_language": resumed_task.get("response_language") if resume_from_input else msg.get("response_language"),
@@ -6505,12 +6505,34 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
                 requested_trace = str(msg.get("task_trace_id") or "")
                 saved_trace = (resume_state.get("task") or {}).get("task_trace_id")
-                if (not resume_state["messages"] or resume_state.get("reason") == "context_exhausted"
+                if (not resume_state["messages"]
                         or (requested_trace and requested_trace != saved_trace)):
-                    await send_ws("error", {"where": "task.resume", "msg": "该任务没有有效断点，可能已完成、过期或被后续任务替代；不会从头重复执行。"}, conversation_id)
+                    await send_ws("error", {"where": "task.resume", "msg": "该任务当前没有可用的已保存断点，未从头重复执行。"}, conversation_id)
                     await send_conversation_history(conversation_id)
                     continue
                 task = dict(resume_state.get("task") or {"text": "继续", "provider_id": "default", "model": CFG.llm.chat_model, "approval_mode": "risk"})
+                requested_provider = str(msg.get("provider_id") or "").strip()
+                requested_model = str(msg.get("model") or "").strip()
+                selection = (DESKTOP_CONVERSATIONS.get(conversation_id) or {}).get("model_selection") or {}
+                selected_provider = str(selection.get("provider_id") or "").strip()
+                selected_model = str(selection.get("model") or "").strip()
+                options = _model_options()
+                requested_pair = (requested_provider, requested_model)
+                selected_pair = (selected_provider, selected_model)
+                saved_pair = (
+                    str(task.get("provider_id") or "default").strip(),
+                    str(task.get("model") or "").strip(),
+                )
+                if requested_model:
+                    if requested_pair not in {(item["provider_id"], item["model"]) for item in options}:
+                        await send_ws("error", {"where": "llm.config", "msg": "所选模型或接口已不可用，请重新选择后再继续；任务断点仍保留。"}, conversation_id)
+                        continue
+                    chosen_pair = requested_pair
+                elif selected_model and selected_pair in {(item["provider_id"], item["model"]) for item in options}:
+                    chosen_pair = selected_pair
+                else:
+                    chosen_pair = saved_pair
+                task["provider_id"], task["model"] = chosen_pair
                 task["conversation_id"] = conversation_id
                 state["current"] = asyncio.create_task(run_queue(state, task, resume=True))
                 continue

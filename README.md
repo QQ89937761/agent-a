@@ -201,7 +201,7 @@ npm run dist
 
 `npm run dist` 会执行前后端检查、构建冻结后端、准备插件运行环境，最后生成 Windows x64 便携版 EXE。产物位于 `frontend\dist`；构建产物不会提交到 Git。正式版内置同版本云端部署文件，安装、更新或修复云端时从本机打包并通过 SSH 上传。
 
-推送形如 `v1.0.42` 的版本标签后，GitHub Actions 会在 Windows 环境完成检查、构建并创建 GitHub Release；发布前请确认已通过本地测试。便携版更新器只读取该仓库的公开 Releases，开发版不会替换源码目录。
+推送形如 `v1.0.43` 的版本标签后，GitHub Actions 会在 Windows 环境完成检查、构建并创建 GitHub Release；发布前请确认已通过本地测试。便携版更新器只读取该仓库的公开 Releases，开发版不会替换源码目录。
 
 GitHub Actions 会运行后端严格测试、工具静态检查及完整前端检查。自动测试不能代替另一台电脑的正式版启动、Windows 桌面交互及 Office / CAD 真机验收。
 

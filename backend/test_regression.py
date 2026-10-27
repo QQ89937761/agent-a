@@ -13,7 +13,7 @@ from unittest import mock
 import httpx
 
 from backend.core.agent import (
-    Agent, TOOL_RESULT_REF_TTL_SECONDS, cleanup_result_refs, compact_context_messages,
+    Agent, compact_context_messages,
     compact_for_limit, drop_oldest_round, estimate_messages_tokens, estimate_text_tokens,
     _looks_dangerous, _looks_financial, _looks_remote_confirmation,
 )
@@ -237,6 +237,166 @@ class UserToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DynamicToolAgentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_llm_wait_keeps_completed_tool_for_model_switch_resume(self):
+        registry = ToolRegistry()
+        called = []
+        llm_started = asyncio.Event()
+
+        async def write_once():
+            called.append("write")
+            return "已写入"
+
+        registry.register(Tool(
+            "write_once", "写入一次", {"type": "object"}, write_once,
+            side_effect=True,
+        ))
+
+        class BlockingLLM:
+            def __init__(self):
+                self.turn = 0
+
+            async def chat_stream_tools(self, _messages, **_kwargs):
+                self.turn += 1
+                if self.turn == 1:
+                    yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "write-1", "type": "function", "function": {
+                            "name": "write_once", "arguments": "{}",
+                        },
+                    }]}
+                    return
+                llm_started.set()
+                await asyncio.sleep(30)
+
+        agent = Agent(
+            BlockingLLM(), registry,
+            AgentConfig(confirm_before_action=False, max_steps=3),
+        )
+
+        async def consume():
+            async for _event in agent.run("写入并等待"):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(llm_started.wait(), 2)
+        task.cancel()
+        await asyncio.wait_for(task, 2)
+
+        snapshot = agent.resume_messages()
+        self.assertEqual(["write"], called)
+        self.assertTrue(any(
+            item.get("role") == "tool" and item.get("content") == "已写入"
+            for item in snapshot
+        ), snapshot)
+
+        class SwitchedModelLLM:
+            async def chat_stream_tools(self, messages, **_kwargs):
+                self.messages = messages
+                yield "done", {"role": "assistant", "content": "已继续完成"}
+
+        switched = SwitchedModelLLM()
+        events = [event async for event in Agent(
+            switched, registry, AgentConfig(confirm_before_action=False),
+        ).run("继续", resume_messages=snapshot, model="switched-model")]
+        self.assertEqual("已继续完成", next(
+            event.data["content"] for event in events
+            if event.type in {"message", "message_end"} and event.data.get("content")
+        ))
+        self.assertEqual(1, called.count("write"))
+        self.assertTrue(any(
+            item.get("role") == "tool" and item.get("content") == "已写入"
+            for item in switched.messages
+        ))
+
+    async def test_tool_result_is_checkpointed_before_consumer_can_be_cancelled(self):
+        registry = ToolRegistry()
+        called = []
+
+        async def write_once():
+            called.append("write")
+            return "已写入"
+
+        registry.register(Tool(
+            "write_once", "写入一次", {"type": "object"}, write_once,
+            side_effect=True,
+        ))
+
+        class ToolThenWaitLLM:
+            async def chat_stream_tools(self, _messages, **_kwargs):
+                yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "write-1", "type": "function", "function": {
+                        "name": "write_once", "arguments": "{}",
+                    },
+                }]}
+
+        agent = Agent(
+            ToolThenWaitLLM(), registry,
+            AgentConfig(confirm_before_action=False, max_steps=2),
+        )
+        reached_result = asyncio.Event()
+        release_consumer = asyncio.Event()
+
+        async def consume():
+            async for event in agent.run("写入"):
+                if event.type == "tool_result":
+                    reached_result.set()
+                    await release_consumer.wait()
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(reached_result.wait(), 2)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        snapshot = agent.resume_messages()
+        self.assertEqual(["write"], called)
+        self.assertTrue(any(
+            item.get("role") == "tool" and item.get("content") == "已写入"
+            for item in snapshot
+        ), snapshot)
+
+    async def test_failed_tool_result_is_checkpointed_once_before_consumer_cancel(self):
+        registry = ToolRegistry()
+
+        async def fail_once():
+            raise RuntimeError("模拟工具失败")
+
+        registry.register(Tool(
+            "fail_once", "失败一次", {"type": "object"}, fail_once,
+            side_effect=True,
+        ))
+
+        class ToolThenWaitLLM:
+            async def chat_stream_tools(self, _messages, **_kwargs):
+                yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "fail-1", "type": "function", "function": {
+                        "name": "fail_once", "arguments": "{}",
+                    },
+                }]}
+
+        agent = Agent(
+            ToolThenWaitLLM(), registry,
+            AgentConfig(confirm_before_action=False, max_steps=2),
+        )
+        reached_result = asyncio.Event()
+        release_consumer = asyncio.Event()
+
+        async def consume():
+            async for event in agent.run("执行失败工具"):
+                if event.type == "tool_result":
+                    reached_result.set()
+                    await release_consumer.wait()
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(reached_result.wait(), 2)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        snapshot = agent.resume_messages()
+        results = [item for item in snapshot if item.get("role") == "tool"]
+        self.assertEqual(1, len(results), snapshot)
+        self.assertIn("模拟工具失败", results[0]["content"])
+
     async def test_unknown_tool_is_not_executed_and_model_is_told_to_reselect(self):
         class UnknownThenDoneLLM:
             def __init__(self):
@@ -281,7 +441,7 @@ class DynamicToolAgentTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "不可压缩的原话" + "x" * 20000},
         ])]
         context_stop = next(event for event in context_events if event.type == "truncated")
-        # 光 user 原话就超线,压缩/丢轮都帮不上 → 应报 context_exhausted(开新对话),而非 context_limit(继续干)
+        # 用户原话已超线：保留 context_exhausted 进度，切换更大窗口模型后可继续。
         self.assertEqual("context_exhausted", context_stop.data["reason"])
         self.assertTrue(any(
             "这轮对话太长" in event.data.get("content", "")
@@ -395,18 +555,83 @@ class DynamicToolAgentTests(unittest.IsolatedAsyncioTestCase):
             for event in events
         ))
 
-    def test_expired_result_refs_are_cleaned(self):
-        with tempfile.TemporaryDirectory(prefix="xiaoa-result-cleanup-") as tmp:
-            root = Path(tmp)
-            old = root / "0123456789ab.txt"
-            fresh = root / "abcdef012345.txt"
-            old.write_text("old", encoding="utf-8")
-            fresh.write_text("fresh", encoding="utf-8")
-            now = time.time()
-            os.utime(old, (now - TOOL_RESULT_REF_TTL_SECONDS - 1,) * 2)
-            self.assertEqual(1, cleanup_result_refs(root, now=now))
-            self.assertFalse(old.exists())
-            self.assertTrue(fresh.exists())
+    async def test_result_offload_failure_keeps_completed_result_inline(self):
+        full_result = "重要结果：" + "x" * 20000
+        registry = ToolRegistry()
+
+        async def read_file():
+            return full_result
+
+        registry.register(Tool(
+            "fs_read_text", "读取文件", {"type": "object"}, read_file,
+        ))
+
+        class DoneLLM:
+            def __init__(self):
+                self.turn = 0
+
+            async def chat_stream_tools(self, messages, **_kwargs):
+                self.turn += 1
+                if self.turn == 1:
+                    yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "read-1", "type": "function", "function": {
+                            "name": "fs_read_text", "arguments": "{}",
+                        },
+                    }]}
+                else:
+                    self.tool_messages = [
+                        item["content"] for item in messages if item.get("role") == "tool"
+                    ]
+                    yield "done", {"role": "assistant", "content": "已读取"}
+
+        llm = DoneLLM()
+        with mock.patch.object(Agent, "_offload_result", side_effect=OSError("disk full")):
+            events = [event async for event in Agent(
+                llm, registry, AgentConfig(confirm_before_action=False),
+            ).run("读取")]
+
+        self.assertEqual(full_result, llm.tool_messages[0])
+        result = next(event for event in events if event.type == "tool_result")
+        self.assertTrue(result.data["ok"])
+
+    async def test_result_refs_survive_restart_and_age_in_persistent_store(self):
+        from backend.core import agent as agent_module
+
+        class DoneLLM:
+            async def chat_stream_tools(self, messages, **kwargs):
+                yield "done", {"role": "assistant", "content": "done"}
+
+        with tempfile.TemporaryDirectory(prefix="xiaoa-result-persist-") as tmp, \
+             mock.patch.object(agent_module, "app_home", return_value=Path(tmp)), \
+             mock.patch.object(agent_module.isolation_workspace, "app_home", return_value=Path(tmp)):
+            first = Agent(DoneLLM(), ToolRegistry(), AgentConfig())
+            ref = first._store_result_ref("完成的工具结果")
+            stored = first.result_dir / f"{ref}.txt"
+            old = time.time() - 10 * 365 * 24 * 3600
+            os.utime(stored, (old, old))
+            restarted = Agent(DoneLLM(), ToolRegistry(), AgentConfig())
+            _ = [event async for event in restarted.run("继续")]
+            agent_module.isolation_workspace.cleanup(max_mb=128)
+            self.assertEqual(Path(tmp) / "data" / "agent-results", restarted.result_dir)
+            self.assertEqual("完成的工具结果", restarted._read_result_ref(ref))
+            with self.assertRaises(ValueError):
+                restarted._read_result_ref("../outside")
+
+    def test_legacy_results_do_not_escape_explicit_result_directory(self):
+        from backend.core import agent as agent_module
+
+        with tempfile.TemporaryDirectory(prefix="xiaoa-result-scope-") as tmp, \
+             mock.patch.object(agent_module, "app_home", return_value=Path(tmp)), \
+             mock.patch.object(agent_module.isolation_workspace, "app_home", return_value=Path(tmp)):
+            ref = "0123456789ab"
+            legacy = agent_module.isolation_workspace.temporary() / "agent-results"
+            legacy.mkdir()
+            (legacy / f"{ref}.txt").write_text("旧结果", encoding="utf-8")
+            default = Agent(None, ToolRegistry(), AgentConfig())
+            self.assertEqual("旧结果", default._read_result_ref(ref))
+            explicit = Agent(None, ToolRegistry(), AgentConfig(), result_dir=Path(tmp) / "custom")
+            with self.assertRaises(FileNotFoundError):
+                explicit._read_result_ref(ref)
 
     def test_token_estimate_and_compaction_preserve_instructions_and_recent_rounds(self):
         self.assertEqual(10, estimate_text_tokens("abcdefghijklmnopqrst" * 2))
@@ -2096,12 +2321,17 @@ class ContextExhaustedMessageTests(unittest.TestCase):
         self.assertIn("图", msg)
         self.assertIn("MB", msg)
         self.assertNotIn("你说过的话", msg)
+        self.assertIn("进度已保留", msg)
+        self.assertIn("模型后继续", msg)
 
-    def test_text_heavy_message_keeps_original_wording(self):
+    def test_text_heavy_message_preserves_progress_for_model_switch(self):
         from backend.core.agent import _context_exhausted_message
         messages = [{"role": "user", "content": "这是一段很长的文字。" * 60}]
         msg = _context_exhausted_message(messages)
         self.assertIn("你说过的话", msg)
+        self.assertIn("进度已保留", msg)
+        self.assertIn("模型后继续", msg)
+        self.assertNotIn("新对话", msg)
 
 
 if __name__ == "__main__":

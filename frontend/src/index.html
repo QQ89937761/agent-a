@@ -2233,7 +2233,10 @@
         card.current.hidden = false; card.current.textContent = "连接尚未恢复，请连接后再继续。"; return;
       }
       try {
-        ws.send(JSON.stringify({type: "continue_task", conversation_id: card.conversationId, task_trace_id: card.trace.id}));
+        ws.send(JSON.stringify({
+          type: "continue_task", conversation_id: card.conversationId,
+          task_trace_id: card.trace.id, provider_id: selectedProviderId, model: selectedModel,
+        }));
         card.resumePending = true; card.resumeButton.disabled = true;
         card.resumeButton.textContent = "正在恢复断点…";
         setBusy(true); statusEl.textContent = "正在恢复断点…";
@@ -2821,25 +2824,10 @@
 
     // 触发执行保护:显示"继续"按钮,点一下从断点接着干
     function showContinue(reason, summary = "") {
-      if (reason === "context_exhausted") {
-        // 死局:光 user 原话就超线,压缩帮不上。给说明,不给"继续"按钮(那会再弹一次)。
-        document.querySelectorAll(".resume-box").forEach(item => item.remove());
-        const box = document.createElement("div");
-        box.className = "confirm-box resume-box";
-        box.innerHTML = `
-          <div>这轮对话太长了，你说过的话本身已经超出模型窗口，压缩也帮不上。<br>
-          请开一个新对话，小A会把刚才的任务进度带过去。</div>
-          <div class="acts">
-            <button class="btn-deny">知道了</button>
-          </div>`;
-        box.querySelector(".btn-deny").onclick = () => box.remove();
-        log.appendChild(box);
-        log.scrollTop = log.scrollHeight;
-        return;
-      }
       const conversationId = currentConversationId;
       const reasonText = {
-        context_limit: "上下文已接近模型窗口上限",
+        context_limit: "上下文已接近模型窗口上限，进度已保存",
+        context_exhausted: "上下文需要切换到可容纳更多内容的模型，进度已保存",
         spinning: "检测到连续重复操作，已停止防止原地打转",
         step_limit: "任务达到防无限执行的最终安全上限",
         saved: "发现上次保存的任务断点",
@@ -2857,7 +2845,10 @@
         </div>`;
       box.querySelector(".btn-allow").onclick = () => {
         if (!ws || ws.readyState !== 1) return;
-        ws.send(JSON.stringify({ type: "continue_task", conversation_id: conversationId }));
+        ws.send(JSON.stringify({
+          type: "continue_task", conversation_id: conversationId,
+          provider_id: selectedProviderId, model: selectedModel,
+        }));
         box.remove();
         setBusy(true);
         statusEl.textContent = "工作中…";
