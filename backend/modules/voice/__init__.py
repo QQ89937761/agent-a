@@ -3,18 +3,27 @@ from __future__ import annotations
 
 from backend.core.config import VoiceConfig
 from backend.modules.voice.tencent_voice import TencentVoice
+from backend.modules.voice.baidu_voice import BaiduVoice
 
 
 def make_tts_engine(cfg: VoiceConfig):
+    if cfg.effective_provider == "baidu":
+        return BaiduVoice(cfg)
+    if cfg.effective_provider != "tencent":
+        raise ValueError("不支持的语音服务商")
     return TencentVoice(cfg)
 
 
 def make_asr_engine(cfg: VoiceConfig):
+    if cfg.effective_provider == "baidu":
+        return BaiduVoice(cfg)
+    if cfg.effective_provider != "tencent":
+        raise ValueError("不支持的语音服务商")
     return TencentVoice(cfg)
 
 
 def _is_mp3(data: bytes) -> bool:
-    return len(data) >= 4 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
+    return len(data) >= 4 and (data.startswith(b"ID3") or (data[0] == 0xFF and (data[1] & 0xE0) == 0xE0))
 
 
 async def synthesize(cfg: VoiceConfig, text: str, voice=None) -> bytes:

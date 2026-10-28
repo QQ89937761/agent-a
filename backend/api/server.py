@@ -295,6 +295,8 @@ def _known_secret_values() -> tuple[str, ...]:
     """Values already held by the app that must never leave in UI events."""
     values = [
         CFG.llm.api_key, CFG.voice.secret_id, CFG.voice.secret_key,
+        CFG.voice.baidu_api_key, CFG.voice.baidu_secret_key,
+        os.getenv("AGENT_BAIDU_API_KEY", ""), os.getenv("AGENT_BAIDU_SECRET_KEY", ""),
         CFG.feishu.app_secret, CFG.auth.password, CFG.role.hub_token,
         CFG.memory.cloud_backup.access_key, CFG.memory.cloud_backup.secret_key,
         os.getenv("AGENT_LLM_API_KEY", ""), os.getenv("AGENT_TENCENT_SECRET_ID", ""),
@@ -2275,7 +2277,20 @@ async def _close_llm_clients() -> None:
             print(f"[shutdown] 关闭模型客户端失败: {type(result).__name__}: {result}")
 
 
+def _configure_chat_voice() -> None:
+    """刷新语音适配器即可应用密钥/服务商变化，无需重连聊天账号。"""
+    from backend.modules.chat import feishu_module, weixin_clawbot
+
+    async def recognize(audio: bytes, fmt: str) -> str:
+        return await transcribe(CFG.voice, audio, fmt=fmt)
+
+    hook = recognize if CFG.voice.asr_enabled else None
+    feishu_module.set_asr_hook(hook)
+    weixin_clawbot.set_asr_hook(hook)
+
+
 def _start_chat_listeners(loop=None) -> None:
+    _configure_chat_voice()
     # 从后台线程调用时,主事件循环由参数传入(线程里没有 running loop)
     if loop is None:
         loop = asyncio.get_running_loop()
@@ -2296,12 +2311,6 @@ def _start_chat_listeners(loop=None) -> None:
         try:
             if CFG.feishu.enabled:
                 from backend.modules.chat import feishu_module
-
-                # 注入语音转文字能力:飞书收到语音消息时按语音引擎转成文字再执行
-                if CFG.voice.asr_enabled:
-                    async def _asr(audio: bytes, fmt: str) -> str:
-                        return await transcribe(CFG.voice, audio, fmt=fmt)
-                    feishu_module.set_asr_hook(_asr)
 
                 async def _vision(prompt: str, image: bytes, image_format: str) -> str:
                     vision_llm = LLM
@@ -2326,11 +2335,6 @@ def _start_chat_listeners(loop=None) -> None:
     # receives the message; the worker still executes the actual desktop tool.
     try:
         from backend.modules.chat import weixin_clawbot
-
-        if CFG.voice.asr_enabled:
-            async def _weixin_asr(audio: bytes, fmt: str) -> str:
-                return await transcribe(CFG.voice, audio, fmt=fmt)
-            weixin_clawbot.set_asr_hook(_weixin_asr)
 
         async def _weixin_vision(prompt: str, image: bytes, image_format: str) -> str:
             vision_llm = LLM
@@ -2939,6 +2943,10 @@ def _rewrite_config() -> None:
         f"region = {q(v.region)}",
         f"tts_voice = {v.tts_voice}",
         f"tts_speed = {v.tts_speed}",
+        f"baidu_api_key = {secret(v.baidu_api_key, 'AGENT_BAIDU_API_KEY')}",
+        f"baidu_secret_key = {secret(v.baidu_secret_key, 'AGENT_BAIDU_SECRET_KEY')}",
+        f"baidu_tts_voice = {v.baidu_tts_voice}",
+        f"baidu_tts_speed = {v.baidu_tts_speed}",
         "",
         "[feishu]",
         f"app_id = {secret(CFG.feishu.app_id, 'AGENT_FEISHU_APP_ID')}",
@@ -3047,6 +3055,11 @@ async def api_get_settings() -> dict:
         },
         "memory_sync_audit": _memory_sync_audit().summary(),
         "voice": {
+            "provider": CFG.voice.effective_provider,
+            "baidu_api_key_masked": _mask(CFG.voice.baidu_api_key),
+            "baidu_secret_key_masked": _mask(CFG.voice.baidu_secret_key),
+            "baidu_tts_voice": CFG.voice.baidu_tts_voice,
+            "baidu_tts_speed": CFG.voice.baidu_tts_speed,
             "secret_id_masked": _mask(CFG.voice.secret_id),
             "secret_key_masked": _mask(CFG.voice.secret_key),
             "region": CFG.voice.region,
@@ -3137,6 +3150,11 @@ class SettingsRequest(BaseModel):
     memory_backup_dir: str | None = None
     memory_backup_interval_minutes: int | None = None
     memory_backup_keep_count: int | None = None
+    speech_provider: str | None = None
+    baidu_api_key: str = ""
+    baidu_secret_key: str = ""
+    baidu_tts_voice: int | None = None
+    baidu_tts_speed: int | None = None
     tc_secret_id: str = ""
     tc_secret_key: str = ""
     tc_region: str = ""
@@ -3173,6 +3191,7 @@ _SETTING_SECTION_FIELDS = {
     },
     "voice": {
         "tc_secret_id", "tc_secret_key", "tc_region", "tts_voice",
+        "speech_provider", "baidu_api_key", "baidu_secret_key", "baidu_tts_voice", "baidu_tts_speed",
     },
     "connections": {
         "feishu_app_id", "feishu_app_secret", "feishu_allowed_open_ids",
@@ -3254,6 +3273,8 @@ def _ignored_env_setting_changes(req: SettingsRequest) -> list[dict[str, str]]:
                     _changed(item.api_key.strip(), current.api_key if current else ""),
                 )
     add("llm.default.api_key", _changed(req.api_key.strip(), CFG.llm.api_key))
+    add("voice.baidu_api_key", _changed(req.baidu_api_key.strip(), CFG.voice.baidu_api_key))
+    add("voice.baidu_secret_key", _changed(req.baidu_secret_key.strip(), CFG.voice.baidu_secret_key))
     add("voice.secret_id", _changed(req.tc_secret_id.strip(), CFG.voice.secret_id))
     add("voice.secret_key", _changed(req.tc_secret_key.strip(), CFG.voice.secret_key))
     add(
@@ -3562,6 +3583,11 @@ async def _run_cloud_deploy(job_id: str, req: CloudDeployRequest) -> None:
             context_window=CFG.agent.context_window,
             voice_secret_id=CFG.voice.secret_id,
             voice_secret_key=CFG.voice.secret_key,
+            speech_provider=CFG.voice.effective_provider,
+            baidu_api_key=CFG.voice.baidu_api_key,
+            baidu_secret_key=CFG.voice.baidu_secret_key,
+            baidu_tts_voice=CFG.voice.baidu_tts_voice,
+            baidu_tts_speed=CFG.voice.baidu_tts_speed,
             voice_region=CFG.voice.region,
             tts_voice=CFG.voice.tts_voice,
             tts_speed=CFG.voice.tts_speed,
@@ -4550,6 +4576,11 @@ async def api_cloud_runtime(request: Request) -> dict:
         "AGENT_TENCENT_SECRET_ID": CFG.voice.secret_id,
         "AGENT_TENCENT_SECRET_KEY": CFG.voice.secret_key,
         "AGENT_TENCENT_REGION": CFG.voice.region,
+        "AGENT_SPEECH_PROVIDER": CFG.voice.effective_provider,
+        "AGENT_BAIDU_API_KEY": CFG.voice.baidu_api_key,
+        "AGENT_BAIDU_SECRET_KEY": CFG.voice.baidu_secret_key,
+        "AGENT_BAIDU_TTS_VOICE": str(CFG.voice.baidu_tts_voice),
+        "AGENT_BAIDU_TTS_SPEED": str(CFG.voice.baidu_tts_speed),
         "AGENT_TTS_VOICE": str(CFG.voice.tts_voice),
         "AGENT_TTS_SPEED": str(CFG.voice.tts_speed),
         "AGENT_SCHEDULE_TASKS": SCHEDULER.sync_payload(),
@@ -4663,6 +4694,13 @@ async def api_save_settings(req: SettingsRequest) -> dict:
     )
     ignored_env = _ignored_env_setting_changes(req)
     try:
+        if req.speech_provider is not None and req.speech_provider not in {"tencent", "baidu"}:
+            raise ValueError("不支持的语音服务商")
+        for value, low, high in ((req.tts_voice, 1, 999999), (req.baidu_tts_voice, 0, 999999), (req.baidu_tts_speed, 0, 15)):
+            if value is not None and not low <= value <= high:
+                raise ValueError("音色编号或语速不正确")
+        if any(char in req.baidu_api_key + req.baidu_secret_key for char in "\r\n\0"):
+            raise ValueError("百度语音密钥包含非法字符")
         if any(char in req.web_password for char in "\r\n\0"):
             raise ValueError("网页密码包含非法字符")
         role_supplied = any(value is not None for value in (
@@ -4772,6 +4810,15 @@ async def api_save_settings(req: SettingsRequest) -> dict:
         if _changed(req.api_key, CFG.llm.api_key):
             CFG.llm.api_key = req.api_key.strip()
 
+        if req.speech_provider is not None:
+            CFG.voice.provider = req.speech_provider
+        for attr in ("baidu_api_key", "baidu_secret_key"):
+            value = getattr(req, attr).strip()
+            if _changed(value, getattr(CFG.voice, attr)):
+                setattr(CFG.voice, attr, value)
+        for attr in ("baidu_tts_voice", "baidu_tts_speed"):
+            if getattr(req, attr) is not None:
+                setattr(CFG.voice, attr, getattr(req, attr))
         if req.tc_region:
             CFG.voice.region = req.tc_region.strip()
         if _changed(req.tc_secret_id, CFG.voice.secret_id):
@@ -4828,6 +4875,8 @@ async def api_save_settings(req: SettingsRequest) -> dict:
         # Persist before replacing clients, disconnecting sessions or restarting listeners.
         _rewrite_config()
         config_saved = True
+        if previous_config.voice != CFG.voice:
+            _configure_chat_voice()
         feishu_credentials_changed = (
             CFG.feishu.app_id != old_feishu_app_id
             or CFG.feishu.app_secret != old_feishu_secret
@@ -5090,7 +5139,7 @@ async def api_tts(req: TTSRequest) -> dict:
 
 
 @app.get("/api/tts/preview")
-async def api_tts_preview(voice: str = ""):
+async def api_tts_preview(voice: str = "", provider: str = ""):
     """Return preview audio as a real media response so browsers may play it from one click."""
     from fastapi.responses import Response
 
@@ -5101,13 +5150,13 @@ async def api_tts_preview(voice: str = ""):
             voice_value = int(voice)
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="\u97f3\u8272\u7f16\u53f7\u4e0d\u6b63\u786e")
-        if not 1 <= voice_value <= 999999:
+        if provider and provider != CFG.voice.effective_provider:
+            raise HTTPException(status_code=409, detail="请先保存所选语音服务商，再试听")
+        if not (0 if CFG.voice.effective_provider == "baidu" else 1) <= voice_value <= 999999:
             raise HTTPException(status_code=422, detail="\u97f3\u8272\u7f16\u53f7\u4e0d\u6b63\u786e")
         audio = await synthesize(
-            CFG.voice, "你好，我是小A。这个 PPT 和 Excel 我来帮你搞定。", voice=voice_value,
+            CFG.voice, "你好，我是小A。Hello！这个 PPT 和 Excel 我来帮你搞定。", voice=voice_value,
         )
-        if len(audio) < 4 or audio[0] != 0xFF or audio[1] & 0xE0 != 0xE0:
-            raise ValueError("语音服务没有返回有效的 MP3")
         return Response(
             content=audio,
             media_type="audio/mpeg",
@@ -5138,19 +5187,25 @@ def _persist_voice(voice: int) -> None:
 @app.post("/api/set_voice")
 async def api_set_voice(req: SetVoiceRequest) -> dict:
     """把某个音色设为小A的默认声音(即时生效 + 写回配置)。"""
-    CFG.voice.tts_voice = req.voice
+    if not (0 if CFG.voice.effective_provider == "baidu" else 1) <= req.voice <= 999999:
+        raise HTTPException(status_code=422, detail="音色编号不正确")
+    attr = "baidu_tts_voice" if CFG.voice.effective_provider == "baidu" else "tts_voice"
+    previous = getattr(CFG.voice, attr)
+    setattr(CFG.voice, attr, req.voice)
     try:
         _persist_voice(req.voice)
         return {"ok": True, "voice": req.voice}
     except Exception as e:
+        setattr(CFG.voice, attr, previous)
         return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/current_voice")
 async def api_current_voice() -> dict:
     return {
-        "voice": CFG.voice.tts_voice,
-        "speed": CFG.voice.tts_speed,
+        "provider": CFG.voice.effective_provider,
+        "voice": CFG.voice.current_voice,
+        "speed": CFG.voice.current_speed,
         "tts_enabled": CFG.voice.tts_enabled,
     }
 

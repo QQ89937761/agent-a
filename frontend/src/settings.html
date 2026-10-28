@@ -723,6 +723,12 @@
   </section>
 
   <section class="settings-page" data-page="voice" hidden>
+  <div class="card">
+    <h2>语音服务</h2>
+    <label for="speech_provider">服务商</label>
+    <select id="speech_provider"><option value="tencent">腾讯云</option><option value="baidu">百度智能云</option></select>
+    <div class="hint">用于桌面语音识别与朗读。聊天渠道已附带的识别文字可直接使用；仅收到音频时才需要语音识别服务。切换服务商后请保存，再试听。</div>
+  </div>
   <div class="card" id="tencent_voice_card">
     <h2>腾讯云(识别 + 合成)</h2>
     <label>SecretId</label>
@@ -765,6 +771,44 @@
         <option value="101014">智宁 · 男声播报</option>
       </optgroup>
     </select>
+  </div>
+
+  <div class="card" id="baidu_voice_card" hidden>
+    <h2>百度智能云(识别 + 合成)</h2>
+    <label for="baidu_api_key">API Key</label>
+    <input id="baidu_api_key" type="password" autocomplete="off" placeholder="请输入百度语音应用 API Key" />
+    <label for="baidu_secret_key">Secret Key</label>
+    <input id="baidu_secret_key" type="password" autocomplete="off" placeholder="请输入百度语音应用 Secret Key" />
+    <div class="hint">无需 AppID。请为应用开通短语音识别与在线合成权限并确认额度。精品、大模型音色需相应权限。</div>
+    <label for="baidu_tts_voice">小A音色</label>
+    <select id="baidu_tts_voice">
+      <optgroup label="推荐 · 大模型 · 中英混读（需相应权限）">
+        <option value="4189">度涵竹 · 开朗女声 · 4189</option>
+        <option value="4197">度沁遥 · 知性女声 · 4197</option>
+        <option value="4196">度清影 · 甜美女声 · 4196</option>
+        <option value="4193">度泽言 · 开朗男声 · 4193</option>
+        <option value="4195">度怀安 · 磁性男声 · 4195</option>
+        <option value="4194">度嫣然 · 活泼女声 · 4194</option>
+      </optgroup>
+      <optgroup label="精品 · 中英混读（需相应权限）">
+        <option value="5118">度小鹿 · 甜美女声 · 5118</option>
+        <option value="106">度博文 · 专业男声 · 106</option>
+        <option value="5003">度逍遥 · 情感男声 · 5003</option>
+        <option value="5">度小娇 · 成熟女声 · 5</option>
+        <option value="103">度米朵 · 可爱童声 · 103</option>
+        <option value="110">度小童 · 童声主播 · 110</option>
+        <option value="111">度小萌 · 软萌女声 · 111</option>
+      </optgroup>
+      <optgroup label="基础 · 中文/英文">
+        <option value="0">度小美 · 标准女声 · 0</option>
+        <option value="1">度小宇 · 亲切男声 · 1</option>
+        <option value="3">度逍遥 · 情感男声 · 3</option>
+        <option value="4">度丫丫 · 童声 · 4</option>
+      </optgroup>
+    </select>
+    <div class="hint">中英混读优先试听度涵竹、度沁遥或度小鹿。音色权限以百度控制台为准。</div>
+    <label for="baidu_tts_speed">语速（0—15，默认 5）</label>
+    <input id="baidu_tts_speed" type="number" min="0" max="15" value="5" />
   </div>
 
   <div class="card">
@@ -2342,9 +2386,17 @@
     }
 
     function updateVoiceStatus() {
-      const configured = Boolean($("tc_secret_id").value.trim() && $("tc_secret_key").value.trim());
-      const state = configured ? "\u5df2\u542f\u7528 \u2713" : "\u672a\u914d\u7f6e \u2717";
-      $("voice_status").textContent = `\u5408\u6210:\u817e\u8baf\u4e91 ${state}\u3000\u8bc6\u522b:\u817e\u8baf\u4e91 ${state}`;
+      const baidu = $("speech_provider").value === "baidu";
+      $("tencent_voice_card").hidden = baidu;
+      $("baidu_voice_card").hidden = !baidu;
+      const ids = baidu ? ["baidu_api_key", "baidu_secret_key"] : ["tc_secret_id", "tc_secret_key"];
+      const name = baidu ? "百度智能云" : "腾讯云";
+      const state = ids.every(id => $(id).value.trim()) ? "已填写（保存后生效）" : "未配置 ✗";
+      $("voice_status").textContent = `合成:${name} ${state}　识别:${name} ${state}`;
+    }
+    $("speech_provider").onchange = updateVoiceStatus;
+    for (const id of ["tc_secret_id", "tc_secret_key", "baidu_api_key", "baidu_secret_key"]) {
+      $(id).addEventListener("input", updateVoiceStatus);
     }
 
     function setServiceAvailable(available, message = "") {
@@ -2421,6 +2473,12 @@
       if (sync.last_error) syncText += "；最近错误：" + sync.last_error;
       if (sync.available === false) syncText += "；记录读取失败：" + (sync.error || "未知错误");
       $("memory_sync_status").textContent = syncText;
+      $("speech_provider").value = d.voice.provider || "tencent";
+      for (const id of ["baidu_api_key", "baidu_secret_key"]) {
+        $(id).value = d.voice[id + "_masked"] || "";
+        setManagedInput($(id), "voice." + id);
+      }
+      $("baidu_tts_speed").value = String(d.voice.baidu_tts_speed ?? 5);
       $("tc_secret_id").value = d.voice.secret_id_masked || "";
       $("tc_secret_key").value = d.voice.secret_key_masked || "";
       setManagedInput($("tc_secret_id"), "voice.secret_id");
@@ -2428,11 +2486,12 @@
       $("tc_region").value = d.voice.region || "";
       updateVoiceStatus();
       voiceCfg = d.voice;
-      const currentVoice = await fetch(API + "/api/current_voice").then(response => response.json());
-      if (!Array.from($("tts_voice").options).some(option => Number(option.value) === currentVoice.voice)) {
-        $("tts_voice").add(new Option(`当前音色 ${currentVoice.voice}`, currentVoice.voice));
+      for (const [id, value] of [["tts_voice", d.voice.tts_voice], ["baidu_tts_voice", d.voice.baidu_tts_voice ?? 0]]) {
+        if (!Array.from($(id).options).some(option => Number(option.value) === value)) {
+          $(id).add(new Option(`当前音色 ${value}`, value));
+        }
+        $(id).value = String(value);
       }
-      $("tts_voice").value = String(currentVoice.voice || "");
       $("fs_app_id").value = d.feishu.app_id || "";
       $("fs_app_secret").value = "";
       feishuInitialAppId = d.feishu.app_id || "";
@@ -2710,6 +2769,11 @@
           memory_backup_keep_count: Number($("memory_backup_keep").value || 30),
         }),
         voice: () => ({
+          speech_provider: $("speech_provider").value,
+          baidu_api_key: $("baidu_api_key").value,
+          baidu_secret_key: $("baidu_secret_key").value,
+          baidu_tts_voice: Number($("baidu_tts_voice").value),
+          baidu_tts_speed: Number($("baidu_tts_speed").value),
           tc_secret_id: $("tc_secret_id").value,
           tc_secret_key: $("tc_secret_key").value,
           tc_region: $("tc_region").value,
@@ -3051,8 +3115,9 @@
     $("preview_voice").onclick = async () => {
       const button = $("preview_voice");
       const status = $("voice_preview_status");
-      if (!$("tc_secret_id").value.trim() || !$("tc_secret_key").value.trim()) {
-        status.textContent = "腾讯云还没配 SecretId / SecretKey，先填写再试听";
+      const provider = $("speech_provider").value;
+      if (!voiceCfg || voiceCfg.provider !== provider || !voiceCfg.tts_enabled) {
+        status.textContent = "请先保存所选语音服务商和密钥，再试听";
         status.className = "msg err";
         return;
       }
@@ -3061,8 +3126,8 @@
       status.textContent = "正在生成试听…";
       status.className = "msg";
       try {
-        const voice = $("tts_voice").value;
-        const response = await fetch(`${API}/api/tts/preview?voice=${encodeURIComponent(voice)}&t=${Date.now()}`, {
+        const voice = $(provider === "baidu" ? "baidu_tts_voice" : "tts_voice").value;
+        const response = await fetch(`${API}/api/tts/preview?voice=${encodeURIComponent(voice)}&provider=${encodeURIComponent(provider)}&t=${Date.now()}`, {
           cache: "no-store",
         });
         if (!response.ok) {

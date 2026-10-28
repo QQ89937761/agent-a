@@ -27,7 +27,7 @@ hiddenimports += [
     "backend.modules.chat.weixin_clawbot",
 ]
 
-for package in ("fastembed", "paramiko", "cryptography", "certifi", "qrcode", "uiautomation", "pypdf", "pymupdf"):
+for package in ("fastembed", "paramiko", "cryptography", "certifi", "qrcode", "uiautomation", "pypdf", "pymupdf", "soundfile", "_soundfile_data"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries

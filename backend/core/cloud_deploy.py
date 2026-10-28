@@ -195,6 +195,8 @@ def deploy(host: str, username: str, password: str, root: str | Path,
            context_window: int = 128000,
            voice_secret_id: str = "", voice_secret_key: str = "",
            voice_region: str = "", tts_voice: int = 101016, tts_speed: int = 0,
+           speech_provider: str = "tencent", baidu_api_key: str = "", baidu_secret_key: str = "",
+           baidu_tts_voice: int = 0, baidu_tts_speed: int = 5,
            operation: str = "deploy", web_password: str = "",
            progress: Progress = lambda *_a, **_k: None) -> dict:
     host, username = validate_target(host, username)
@@ -248,12 +250,17 @@ def deploy(host: str, username: str, password: str, root: str | Path,
                     "AGENT_TENCENT_SECRET_ID": voice_secret_id.strip(),
                     "AGENT_TENCENT_SECRET_KEY": voice_secret_key.strip(),
                     "AGENT_TENCENT_REGION": voice_region.strip(),
+                    "AGENT_SPEECH_PROVIDER": speech_provider,
+                    "AGENT_BAIDU_API_KEY": baidu_api_key.strip(),
+                    "AGENT_BAIDU_SECRET_KEY": baidu_secret_key.strip(),
+                    "AGENT_BAIDU_TTS_VOICE": str(baidu_tts_voice),
+                    "AGENT_BAIDU_TTS_SPEED": str(baidu_tts_speed),
                     "AGENT_TTS_VOICE": str(tts_voice), "AGENT_TTS_SPEED": str(tts_speed),
                 }
                 # Empty saved secrets are not an instruction to erase the cloud credentials.
                 if web_password:
                     runtime["AGENT_WEB_PASSWORD"] = web_password
-                for name in ("AGENT_LLM_API_KEY", "AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY"):
+                for name in ("AGENT_LLM_API_KEY", "AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY", "AGENT_BAIDU_API_KEY", "AGENT_BAIDU_SECRET_KEY"):
                     if not runtime[name]:
                         del runtime[name]
                 feishu = {key: value for key, value in {

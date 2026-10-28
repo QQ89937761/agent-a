@@ -560,7 +560,7 @@ async def _handle_audio(on_message, sender: str, chat_id: str,
                         message_id: str, file_key: str) -> None:
     """飞书语音消息:下载 → ASR 转文字 → 当作命令执行。"""
     if _asr_hook is None:
-        await _notify(chat_id, "语音功能没启用(需要在设置页填腾讯云密钥)。")
+        await _notify(chat_id, "语音功能没启用，请在设置页配置语音识别服务，或使用飞书转文字后发送。")
         return
     try:
         audio = await download_resource(message_id, file_key, "file")
@@ -568,7 +568,7 @@ async def _handle_audio(on_message, sender: str, chat_id: str,
         await _notify(chat_id, f"语音下载失败:{e}")
         return
     try:
-        # 飞书语音是 opus 编码的 ogg,腾讯云 ASR 原生支持 ogg-opus
+        # 飞书语音为 Ogg Opus，由所选语音服务的适配器处理。
         text = (await _asr_hook(audio, "ogg-opus") or "").strip()
     except Exception as e:
         await _notify(chat_id, f"语音识别失败:{e}")

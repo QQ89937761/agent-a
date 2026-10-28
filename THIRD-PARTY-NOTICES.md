@@ -14,3 +14,8 @@ AGPL 对适用的组合作品有对应源码及许可要求，不能直接用小
 ## 其他依赖
 
 Python 依赖列于 `backend/requirements*.txt`，Electron/Node 依赖列于 `frontend/package.json` 和 `frontend/package-lock.json`。使用和再分发时须保留各组件要求的版权、许可和声明。小A的单独商业许可不能代替第三方许可。
+
+## 语音音频转换
+
+- SoundFile 0.13.1：BSD-3-Clause，见 https://github.com/bastibe/python-soundfile 。
+- SoundFile 官方二进制包附带 libsndfile（LGPL-2.1-or-later）及其编解码依赖；源码与许可见 https://github.com/libsndfile/libsndfile 。便携版保留独立动态库及其许可，可替换该库，修改或再分发时须满足其许可要求。

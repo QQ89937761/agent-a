@@ -35,3 +35,6 @@ pymupdf==1.28.2
 
 # 飞书(官方 SDK,长连接收发消息)
 lark-oapi==1.7.2
+
+# 百度 ASR 输入转换（飞书/微信 Ogg Opus、桌面音频）
+soundfile==0.13.1

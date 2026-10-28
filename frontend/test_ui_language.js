@@ -280,3 +280,6 @@ assert.equal(translate("云端连接成功，worker 已上线", "en"), "Cloud co
 assert.equal(translate("已完成 6/6 个执行步骤 · 云端连接成功，worker 已上线", "en"), "6/6 steps completed · Cloud connected successfully; worker is online");
 assert.equal(translate("最近操作：部署 / 更新 · 2026/10/26 08:05:27 · 云端连接成功，worker 已上线", "en"), "Latest operation: Deploy / Update · 2026/10/26 08:05:27 · Cloud connected successfully; worker is online");
 console.log("Cloud deployment and release-note English: screenshots, timestamped logs, dynamic status, safe custom diagnostics and locale changes passed");
+
+assert.equal(translate("合成:百度智能云 已填写（保存后生效） 识别:百度智能云 已填写（保存后生效）", "en"),
+  "Speech: Baidu AI Cloud Entered (save to apply) · Recognition: Baidu AI Cloud Entered (save to apply)");

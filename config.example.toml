@@ -65,6 +65,11 @@ open_at_login = false
 isolation_max_mb = 1024
 
 [voice]
+# 服务商：tencent 或 baidu。两家的凭据分别保存；不要填写真实密钥后提交。
+baidu_api_key = ""
+baidu_secret_key = ""
+baidu_tts_voice = 0
+baidu_tts_speed = 5
 provider = ""
 secret_id = ""
 secret_key = ""

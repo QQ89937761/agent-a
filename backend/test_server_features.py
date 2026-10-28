@@ -2154,7 +2154,7 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         cfg.voice.tts_speed = 1
         with patch.object(server, "CFG", cfg):
             status = await server.api_current_voice()
-            self.assertEqual({"voice": 601000, "speed": 1, "tts_enabled": True}, status)
+            self.assertEqual({"provider": "tencent", "voice": 601000, "speed": 1, "tts_enabled": True}, status)
             with patch.object(server, "synthesize", new=AsyncMock(return_value=b"audio")) as synth:
                 result = await server.api_tts(server.TTSRequest(text="我在", voice=status["voice"]))
             self.assertTrue(result["ok"])

@@ -480,6 +480,19 @@ class HubEnvironmentUpdateTests(unittest.TestCase):
         self.assertIn("AGENT_TENCENT_REGION=ap-guangzhou", updated)
         self.assertIn("AGENT_TTS_VOICE=601003", updated)
 
+    def test_updates_baidu_voice_environment_without_changing_tencent(self):
+        values = {
+            "AGENT_SPEECH_PROVIDER": "baidu",
+            "AGENT_BAIDU_API_KEY": "example-api",
+            "AGENT_BAIDU_SECRET_KEY": "example-secret",
+            "AGENT_BAIDU_TTS_VOICE": "0",
+            "AGENT_BAIDU_TTS_SPEED": "5",
+        }
+        updated = update_environment("AGENT_TENCENT_SECRET_ID=existing-example\n", values)
+        for key, value in values.items():
+            self.assertIn(f"{key}={value}\n", updated)
+        self.assertIn("AGENT_TENCENT_SECRET_ID=existing-example\n", updated)
+
     def test_allowed_includes_tencent_voice_and_schedule(self):
         from deploy.update_hub_env import ALLOWED
         self.assertIn("AGENT_TENCENT_SECRET_ID", ALLOWED)

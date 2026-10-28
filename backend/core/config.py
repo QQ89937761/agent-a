@@ -26,6 +26,8 @@ def scrub_feishu_secret(text: str) -> str:
 
 SECRET_ENV_FIELDS = {
     "AGENT_LLM_API_KEY": ("llm", "api_key"),
+    "AGENT_BAIDU_API_KEY": ("voice", "baidu_api_key"),
+    "AGENT_BAIDU_SECRET_KEY": ("voice", "baidu_secret_key"),
     "AGENT_TENCENT_SECRET_ID": ("voice", "secret_id"),
     "AGENT_TENCENT_SECRET_KEY": ("voice", "secret_key"),
     "AGENT_FEISHU_APP_ID": ("feishu", "app_id"),
@@ -114,12 +116,28 @@ class AgentConfig:
 
 @dataclass
 class VoiceConfig:
-    provider: str = ""  # "tencent" 启用;留空则不启用云语音(兼容旧字段)
+    provider: str = ""  # tencent | baidu; 空值兼容旧腾讯配置
     secret_id: str = ""
     secret_key: str = ""
     region: str = "ap-guangzhou"
     tts_voice: int = 101016
     tts_speed: int = 0
+    baidu_api_key: str = ""
+    baidu_secret_key: str = ""
+    baidu_tts_voice: int = 0
+    baidu_tts_speed: int = 5
+
+    @property
+    def effective_provider(self) -> str:
+        return self.provider or "tencent"
+
+    @property
+    def current_voice(self) -> int:
+        return self.baidu_tts_voice if self.effective_provider == "baidu" else self.tts_voice
+
+    @property
+    def current_speed(self) -> int:
+        return self.baidu_tts_speed if self.effective_provider == "baidu" else self.tts_speed
 
     @property
     def tencent_configured(self) -> bool:
@@ -127,15 +145,17 @@ class VoiceConfig:
 
     @property
     def asr_enabled(self) -> bool:
-        return self.tencent_configured
+        return self.enabled
 
     @property
     def tts_enabled(self) -> bool:
-        return self.tencent_configured
+        return self.enabled
 
     @property
     def enabled(self) -> bool:
-        return self.tencent_configured
+        if self.effective_provider == "baidu":
+            return bool(self.baidu_api_key and self.baidu_secret_key)
+        return self.effective_provider == "tencent" and self.tencent_configured
 
 
 @dataclass
@@ -487,6 +507,20 @@ def apply_env_overrides(cfg: Config) -> Config:
         cfg.voice.secret_id = _normalize_tencent_credential(v, "SecretId")
     if v := os.getenv("AGENT_TENCENT_SECRET_KEY"):
         cfg.voice.secret_key = _normalize_tencent_credential(v, "SecretKey")
+    if v := os.getenv("AGENT_SPEECH_PROVIDER"):
+        cfg.voice.provider = v.strip()
+    for attr, env in (("baidu_api_key", "AGENT_BAIDU_API_KEY"), ("baidu_secret_key", "AGENT_BAIDU_SECRET_KEY")):
+        if v := os.getenv(env):
+            setattr(cfg.voice, attr, v.strip())
+    for attr, env in (("baidu_tts_voice", "AGENT_BAIDU_TTS_VOICE"), ("baidu_tts_speed", "AGENT_BAIDU_TTS_SPEED")):
+        if v := os.getenv(env):
+            try:
+                value = int(v)
+                if not 0 <= value <= (15 if attr.endswith("speed") else 999999):
+                    raise ValueError
+                setattr(cfg.voice, attr, value)
+            except ValueError:
+                _LOGGER.warning("忽略无效的 %s:音色编号或语速超出范围", env)
     if v := os.getenv("AGENT_TENCENT_REGION"):
         cfg.voice.region = v
     if v := os.getenv("AGENT_TTS_VOICE"):

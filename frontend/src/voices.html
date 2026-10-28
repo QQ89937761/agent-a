@@ -44,7 +44,7 @@
     const API = (IS_LOCAL_FILE ? "http:" : location.protocol) + "//" + HOST;
     // 样本带英文,方便你对比哪个音色能把 PPT、Excel 读成词而不是一个个字母
     const SAMPLE = "你好,我是小A。这个 PPT 和 Excel 我来帮你搞定,OK?";
-    const voices = [
+    let voices = [
       // ★ 大模型音色(601xxx):更自然、中英混读好,英文不再逐字母。都试听一下挑喜欢的。
       // (名字腾讯没给全,按编号排;下面这些大多是女声/中性,逐个点"试听"用耳朵挑最准)
       { code: 601000, name: "大模型 601000", meta: "自然 · 中英混读好 ★" },
@@ -80,6 +80,25 @@
     const grid = document.getElementById("grid");
 
     fetch(API + "/api/current_voice").then(r => r.json()).then(d => {
+      if (d.provider === "baidu") voices = [
+        {"code": 4189, "name": "度涵竹 · 开朗女声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 4197, "name": "度沁遥 · 知性女声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 4196, "name": "度清影 · 甜美女声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 4193, "name": "度泽言 · 开朗男声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 4195, "name": "度怀安 · 磁性男声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 4194, "name": "度嫣然 · 活泼女声", "meta": "推荐 · 大模型 · 中英混读（需相应权限）"},
+        {"code": 5118, "name": "度小鹿 · 甜美女声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 106, "name": "度博文 · 专业男声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 5003, "name": "度逍遥 · 情感男声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 5, "name": "度小娇 · 成熟女声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 103, "name": "度米朵 · 可爱童声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 110, "name": "度小童 · 童声主播", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 111, "name": "度小萌 · 软萌女声", "meta": "精品 · 中英混读（需相应权限）"},
+        {"code": 0, "name": "度小美 · 标准女声", "meta": "基础 · 中文/英文"},
+        {"code": 1, "name": "度小宇 · 亲切男声", "meta": "基础 · 中文/英文"},
+        {"code": 3, "name": "度逍遥 · 情感男声", "meta": "基础 · 中文/英文"},
+        {"code": 4, "name": "度丫丫 · 童声", "meta": "基础 · 中文/英文"},
+      ];
       currentVoice = d.voice; render();
     }).catch(render);
 

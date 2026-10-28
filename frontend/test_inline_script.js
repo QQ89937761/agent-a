@@ -664,7 +664,7 @@ if (toggleCount !== 1) {
   throw new Error("float click did not toggle chat");
 }
 (async () => {
-  // Voice cache follows the selected Tencent Cloud voice.
+  // Wake response follows the saved provider, voice and speed, including first use.
   const hiStart = html.indexOf("let cachedHi = null");
   const hiEnd = html.indexOf("async function playHi", hiStart);
   if (hiStart < 0 || hiEnd < 0) throw new Error("voice cache signature logic missing");
@@ -696,6 +696,14 @@ if (toggleCount !== 1) {
     throw new Error("unchanged Tencent voice unexpectedly regenerated audio");
   }
 
+  const baiduZero = await scenario({ provider: "baidu", voice: 0 }, { provider: "baidu", voice: 4189 });
+  if (baiduZero.afterSame !== 1 || baiduZero.final !== 2) {
+    throw new Error("Baidu voice zero must be cached and refreshed correctly");
+  }
+  const switchedProvider = await scenario({ provider: "tencent", voice: 1, speed: 5 }, { provider: "baidu", voice: 1, speed: 5 });
+  if (switchedProvider.afterSame !== 1 || switchedProvider.final !== 2) {
+    throw new Error("provider change must refresh audio even with the same voice number");
+  }
   const assertVoice = require("node:assert/strict");
   const playEnd = html.indexOf("function onWakeTriggered", hiStart);
   const makeWake = new Function(
@@ -709,7 +717,7 @@ if (toggleCount !== 1) {
   };
   let currentVoice = {voice: 601003, speed: 0, tts_enabled: true};
   const pending = [], requestedVoices = [], played = [];
-  let systemSpeech = 0, failStatus = false;
+  let systemSpeech = 0, failStatus = false, failPlayback = false;
   const hint = {};
   const wake = makeWake(
     async () => {
@@ -723,7 +731,7 @@ if (toggleCount !== 1) {
     },
     false, "http://x",
     {speechSynthesis: {cancel() {}, speak() { systemSpeech++; }}},
-    function(source) { played.push(source); this.play = async () => {}; this.pause = () => {}; },
+    function(source) { played.push(source); this.play = async () => { if (failPlayback) throw new Error("playback unavailable"); }; this.pause = () => {}; },
     function() {}, hint,
   );
   const tick = () => new Promise(setImmediate);
@@ -743,12 +751,18 @@ if (toggleCount !== 1) {
   failStatus = true; await wake.playHi();
   assertVoice.equal(systemSpeech, 0, "status failure must not silently select a system voice");
   failStatus = false; currentVoice.tts_enabled = false; await wake.playHi();
-  assertVoice.equal(systemSpeech, 1, "system voice remains available when cloud speech is explicitly disabled");
+  assertVoice.equal(systemSpeech, 0, "wake response must never silently switch to the system voice");
+  assertVoice.match(hint.textContent, /配置并保存语音服务/, "missing speech configuration must be explained");
   currentVoice.tts_enabled = true;
   const failedAudio = wake.refreshCachedHi(); await tick(); pending[3].resolve(null); await failedAudio;
   const retryAudio = wake.refreshCachedHi(); await tick(); pending[4].resolve("retry-voice");
   assertVoice.equal(await retryAudio, "retry-voice", "failed synthesis must be retryable");
 
+  failPlayback = true;
+  await wake.playHi();
+  assertVoice.equal(systemSpeech, 0, "playback failure must not change the voice");
+  assertVoice.match(hint.textContent, /无法确认或合成已设音色/, "playback failure must be visible");
+  console.log("wake response: first-use preload, provider/voice/speed changes, retry and no system fallback passed");
   console.log("inline script syntax passed");
 })().catch((error) => {
   console.error("FAIL:", error.message);
@@ -1187,3 +1201,24 @@ if (toggleCount !== 1) {
   await context.diagnoseConnection();
   assert.equal(elements.connectionNotice.hidden, true, 'late checks cannot overwrite a recovered connection');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Use the actual provider/status function with independent credential fields.
+{
+  const assert = require("node:assert/strict");
+  const start = settingsHtml.indexOf("    function updateVoiceStatus()");
+  const end = settingsHtml.indexOf('    $("speech_provider").onchange', start);
+  const fields = Object.fromEntries(["speech_provider", "tencent_voice_card", "baidu_voice_card", "tc_secret_id", "tc_secret_key", "baidu_api_key", "baidu_secret_key", "voice_status"].map(id => [id, {value: "", hidden: false, textContent: ""}]));
+  const update = new Function("$", settingsHtml.slice(start, end) + "; return updateVoiceStatus;")(id => fields[id]);
+  fields.speech_provider.value = "tencent";
+  fields.tc_secret_id.value = "tc-id"; fields.tc_secret_key.value = "tc-key";
+  update(); assert.equal(fields.baidu_voice_card.hidden, true);
+  fields.speech_provider.value = "baidu";
+  update(); assert.equal(fields.tencent_voice_card.hidden, true);
+  assert.match(fields.voice_status.textContent, /百度智能云 未配置/);
+  fields.baidu_api_key.value = "example-api"; fields.baidu_secret_key.value = "example-secret";
+  update(); assert.match(fields.voice_status.textContent, /已填写/);
+  fields.speech_provider.value = "tencent"; update();
+  assert.equal(fields.baidu_api_key.value, "example-api");
+  assert.equal(fields.tc_secret_key.value, "tc-key");
+  console.log("speech provider: independent credentials, visible form and status passed");
+}

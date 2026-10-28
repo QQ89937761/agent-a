@@ -3785,7 +3785,7 @@
     let cachedHi = null;   // 按已保存音色复用合成中的请求，避免预加载和首次唤醒互相覆盖。
     let hiAudio = null;    // 独立于回复播放器，录音不会掐断“我在”。
     function voiceSignature(v) {
-      return `${v.voice}|${v.speed}`;
+      return `${v.provider || "tencent"}|${v.voice}|${v.speed}`;
     }
     async function refreshCachedHi() {
       const response = await fetch(API + "/api/current_voice", {
@@ -3807,42 +3807,29 @@
       return audio;
     }
     async function playHi() {
-      // 浏览器 speechSynthesis 在 Electron 里没内置引擎、自动触发也常被拦,
-      // 所以"我在"改用腾讯云 TTS(和其它朗读一致),首次合成后缓存下来复用。
+      // 唤醒应答只用已保存的云音色；首次等待预加载，失败时提示而不更换声音。
       try {
         const audio = await refreshCachedHi();
         if (audio) {
-          // 用独立播放器:beginRecording 只 pause 回复的 ttsAudio,不碰 hiAudio,
-          // 所以"我在"每次都能完整播出(之前隔次没声就是被录音的 pause 掐了)。
+          // 独立播放器避免指令录音中断“我在”。
           if (hiAudio) { try { hiAudio.pause(); } catch (_) {} }
           hiAudio = new Audio("data:audio/mpeg;base64," + audio);
-          hiAudio.play().catch(() => {});
+          await hiAudio.play();
           return;
         }
       } catch (_) {
         voiceHint.textContent = "⚠ 无法确认或合成已设音色，请稍后重试";
         return;
       }
-      // 已配置云音色时宁可提示失败，也不偷偷换成浏览器的另一种嗓音。
-      if (voiceCloud) {
-        voiceHint.textContent = "⚠ 云端语音暂时失败，未切换其他音色";
-        return;
-      }
-      // 未配置云语音时才使用浏览器合成。
-      if (window.speechSynthesis) {
-        try {
-          window.speechSynthesis.cancel();
-          const u = new SpeechSynthesisUtterance("我在");
-          u.lang = "zh-CN"; u.rate = 1.1;
-          window.speechSynthesis.speak(u);
-        } catch (_) {}
-      }
+      voiceHint.textContent = voiceCloud
+        ? "⚠ 云端语音暂时失败，未切换其他音色"
+        : "⚠ 请先在设置中配置并保存语音服务，再使用唤醒应答";
     }
     function onWakeTriggered() {
       if (!wakeActive || fromWake || recording) return;
       voiceHint.textContent = "😊 我在,请说…";
       fromWake = true;          // 标记这轮由唤醒触发:指令自动发 + 回复朗读
-      playHi();                 // 出声说"我在"(腾讯云,已缓存则秒播)
+      playHi();                 // 按已保存音色说“我在”，已缓存则直接播放
       // 进入指令录音(和"我在"并行,不用等它播完)
       setTimeout(async () => {
         if (recording) return;
