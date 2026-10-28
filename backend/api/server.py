@@ -5422,6 +5422,16 @@ async def markdown_table_script():
     return FileResponse(str(_frontend_file("markdown-table.js")), media_type="text/javascript")
 
 
+@app.get("/math-renderer.js")
+async def math_renderer_script():
+    return FileResponse(str(_frontend_file("math-renderer.js")), media_type="text/javascript")
+
+
+@app.get("/vendor/katex/katex.min.js")
+async def katex_script():
+    return FileResponse(str(_frontend_file("vendor/katex/katex.min.js")), media_type="text/javascript")
+
+
 @app.get("/chat-navigator.js")
 async def chat_navigator_script():
     return FileResponse(str(_frontend_file("chat-navigator.js")), media_type="text/javascript")

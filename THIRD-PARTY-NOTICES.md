@@ -19,3 +19,9 @@ Python 依赖列于 `backend/requirements*.txt`，Electron/Node 依赖列于 `fr
 
 - SoundFile 0.13.1：BSD-3-Clause，见 https://github.com/bastibe/python-soundfile 。
 - SoundFile 官方二进制包附带 libsndfile（LGPL-2.1-or-later）及其编解码依赖；源码与许可见 https://github.com/libsndfile/libsndfile 。便携版保留独立动态库及其许可，可替换该库，修改或再分发时须满足其许可要求。
+
+## 聊天公式渲染
+
+- KaTeX 0.19.1：MIT License，官方项目 https://github.com/KaTeX/KaTeX 。
+- 本地浏览器包及完整版权/许可保留在 `frontend/src/vendor/katex/`，来源及包完整性见该目录 `README.md`。
+- 使用 MathML 输出，由浏览器显示公式；不依赖外部 CDN 或远程字体。此第三方组件维持 MIT 许可。

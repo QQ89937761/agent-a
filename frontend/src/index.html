@@ -284,6 +284,9 @@
     .local-file-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
     .local-file-link[aria-busy="true"] { cursor: progress; }
     .local-file-error { display: block; color: var(--danger); font-size: 12px; margin-top: 4px; }
+    .chat-math { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; color: inherit; }
+    .chat-math math { font-size: 1em; }
+    .chat-math-display { display: block; margin: 6px 0; }
     .bubble pre.code, .trace-entry pre.code {
       background: var(--code-bg); border-radius: 8px; padding: 10px 12px; margin: 6px 0;
       font-family: ui-monospace, monospace; font-size: 12.5px; overflow-x: auto;
@@ -700,9 +703,10 @@
       position: absolute; z-index: 3; right: 12px; top: 50%; transform: translateY(-50%);
       display: flex; width: 36px; max-width: calc(100% - 24px); max-height: min(360px, 80%);
       border: 1px solid transparent; border-radius: var(--radius);
-      transition: width .18s ease, background .18s ease, box-shadow .18s ease;
+      transition: width .18s ease, box-shadow .18s ease;
     }
     #messageNavigator[hidden] { display: none; }
+    /* 消息预览始终使用主题的实色衬底，展开时立即遮住下方聊天文字。 */
     #messageNavigator:hover, #messageNavigator:focus-within {
       width: 340px; background: var(--panel); border-color: var(--line);
       box-shadow: 0 14px 32px rgba(25, 42, 66, .16);
@@ -751,7 +755,7 @@
     :root[data-background="transparent"] header .status { background: var(--panel); border-radius: var(--radius); }
     /* 全透明模式：仅背景色使用 70% 不透明度，文字/图标/内容不使用 opacity。 */
     :root[data-background="transparent"] { --surface-opacity: 70%; }
-    :root[data-background="transparent"] :is(.assistant .bubble, .composer-shell, .composer-menu, .md-table, #scrollToBottom, #messageNavigator:hover, #messageNavigator:focus-within, header .status) {
+    :root[data-background="transparent"] :is(.assistant .bubble, .composer-shell, .composer-menu, .md-table, #scrollToBottom, header .status) {
       background: color-mix(in srgb, var(--panel) var(--surface-opacity), transparent);
     }
     :root[data-background="transparent"] .user .bubble {
@@ -990,6 +994,8 @@
 
   <script src="./ui-language.js"></script>
   <script src="./markdown-table.js"></script>
+  <script src="./vendor/katex/katex.min.js"></script>
+  <script src="./math-renderer.js"></script>
   <script src="./chat-navigator.js"></script>
   <script>
     // Electron 里是 file:// 协议,固定连本机;浏览器版用当前 host
@@ -1997,6 +2003,11 @@
         if (!link) return line;
         const i = blocks.length;
         blocks.push(link);
+        return `XIAOACODEPLACEHOLDER${i}END`;
+      });
+      if (window.XiaoAMath) s = window.XiaoAMath.replace(s, markup => {
+        const i = blocks.length;
+        blocks.push(markup);
         return `XIAOACODEPLACEHOLDER${i}END`;
       });
       // 3) 对剩余文本做 HTML 转义 + markdown 行内规则

@@ -233,6 +233,13 @@ assert(html.includes('padding: 2px 8px'), 'voice wake-up control needs side brea
 assert(!html.includes(':is(.step, .event, .timesep, .task-duration, .toolbar label, #voiceHint)'), 'history, timestamps and durations must not receive opaque cards');
 assert(/:root\[data-background="transparent"\] \{\s*--window-bg: transparent;\s*--window-panel: transparent;/.test(html));
 assert(html.includes('background: var(--panel); border: 1px solid var(--border-strong)'));
+// The expanded message preview must stay opaque in every window background mode.
+const navExpanded = html.match(/#messageNavigator:hover, #messageNavigator:focus-within \{([^}]+)\}/);
+assert(navExpanded && /background:\s*var\(--panel\)/.test(navExpanded[1]), 'navigation preview uses the standard theme panel');
+const navBase = html.match(/#messageNavigator \{([^}]+)\}/);
+assert(navBase && !/transition:[^;]*background/.test(navBase[1]), 'preview background appears immediately to prevent overlapping text during expansion');
+const transparentRules = [...html.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector]) => /data-background/.test(selector));
+assert(!transparentRules.some(([, selector, declarations]) => selector.includes('#messageNavigator') && /background\s*:/.test(declarations)), 'window transparency must not override the navigation preview background');
 assert(html.includes(':root[data-maximized="true"] .window-resize { display: none; }'));
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
 assert(pkg.build.files.includes("chat_background.js"));

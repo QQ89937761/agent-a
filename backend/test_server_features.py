@@ -57,6 +57,22 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         package = json.loads((root / "frontend/package.json").read_text(encoding="utf-8"))
         self.assertIn("src/chat-navigator.js", package["build"]["files"])
 
+    async def test_math_renderer_assets_are_served_and_packaged(self):
+        root = Path(__file__).resolve().parents[1]
+        package = json.loads((root / "frontend/package.json").read_text(encoding="utf-8"))
+        for route, handler, relative in [
+            ("/math-renderer.js", server.math_renderer_script, "math-renderer.js"),
+            ("/vendor/katex/katex.min.js", server.katex_script, "vendor/katex/katex.min.js"),
+        ]:
+            with self.subTest(route=route):
+                response = await handler()
+                self.assertEqual(Path(response.path), root / "frontend/src" / relative)
+                self.assertTrue(Path(response.path).is_file())
+                self.assertEqual(response.media_type, "text/javascript")
+                self.assertTrue(any(item.path == route for item in server.app.routes))
+                self.assertIn("src/" + relative, package["build"]["files"])
+        self.assertIn("src/vendor/katex/LICENSE", package["build"]["files"])
+
     async def test_websocket_response_language_follows_each_task_and_checkpoint(self):
         calls = []
 
