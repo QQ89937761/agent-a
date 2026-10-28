@@ -110,6 +110,29 @@ assert.match(toolDescription({name:"screen_capture"}), /^Capture the desktop/);
 assert.match(toolDescription({name:"cad_erase_entities",danger:true}), /High-risk.*approval/);
 assert.match(toolDescription({name:"excel_write_cells",side_effect:true}), /Changes system state/);
 assert.equal(toolDescription({name:"custom_user_tool"}), "");
+for (const [name, expected] of [
+  ["pdf_read_text", "Read PDF text page by page"],
+  ["pdf_list_pages", "Check that a PDF exists"],
+  ["pdf_extract_images", "Extract embedded images from a PDF"],
+  ["pdf_render_pages", "Render specified PDF pages as PNG files"],
+  ["word_list_paragraphs", "List body paragraphs in an existing .docx"],
+  ["word_apply_replacements", "Apply multiple find-and-replace operations"],
+  ["word_append_paragraphs", "Append a set of formal paragraphs"],
+  ["word_insert_paragraphs", "Insert paragraphs at a specified body position"],
+  ["word_append_blocks", "Append structured sections, headings"],
+]) {
+  const description = toolDescription({name, side_effect:true, danger:name.startsWith("pdf_extract") || name === "pdf_render_pages" || name.startsWith("word_") && !name.includes("list_")});
+  assert(description.startsWith(expected), `Missing English description for ${name}`);
+  assert(!/[\u3400-\u9fff]/.test(description), `Chinese text remains in ${name}`);
+  if (name === "pdf_extract_images" || name === "pdf_render_pages" || name.startsWith("word_apply") || name.startsWith("word_append") || name.startsWith("word_insert")) {
+    assert(description.includes("High-risk") && description.includes("approval"), `Risk notice missing for ${name}`);
+  }
+}
+// Keep every registered Office/PDF tool covered as the catalog grows.
+const officeSource = fs.readFileSync("../backend/modules/office/office_module.py", "utf8");
+for (const [, name] of officeSource.matchAll(/@registry\.tool\(\s*name\s*=\s*"([^"]+)"/g)) {
+  assert(toolDescription({name}), `Missing Office/PDF English description: ${name}`);
+}
 // Minimal DOM: exercise real observer/persistence without adding a dependency.
 function element(tag = "DIV", attrs = {}, parent = null) {
   const attributes = new Map(Object.entries(attrs));
@@ -213,6 +236,25 @@ for (const [source, expected] of [
 }
 console.log("Cloud language: progress templates, reversible empty state and verbatim real logs passed");
 
+// Tool descriptions inserted after load must switch both ways without changing tool IDs.
+{
+  const body = element();
+  const descriptions = ["pdf_read_text", "pdf_list_pages", "pdf_extract_images", "pdf_render_pages",
+    "word_list_paragraphs", "word_apply_replacements", "word_append_paragraphs", "word_insert_paragraphs", "word_append_blocks"];
+  const app = runtime("en", false, body);
+  for (const name of descriptions) {
+    const source = `${name} 中文工具说明`, english = toolDescription({name, danger:true});
+    const label = element("SPAN", {"data-i18n-en":english}, body);
+    body.childNodes.push(label);
+    const node = appendText(label, source);
+    app.mutate([{type:"childList",addedNodes:[label]}]);
+    assert.equal(node.nodeValue, english);
+    for (let i = 0; i < 3; i++) {
+      app.window.XiaoALanguage.set("zh"); assert.equal(node.nodeValue, source);
+      app.window.XiaoALanguage.set("en"); assert.equal(node.nodeValue, english);
+    }
+  }
+}
 // Include tools registered via CAD helper decorators, not just @registry.tool.
 const cadSource = fs.readFileSync("../backend/modules/cad/cad_module.py", "utf8");
 const cadNames = JSON.parse(cadSource.match(/EXPOSED_TOOLS = (\[[\s\S]*?\])/)[1].replace(/,\s*\]/, "]"));
@@ -370,6 +412,32 @@ const englishRelease1049Notes = [
   "Before upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.",
   ""
 ].join("\n");
+const release1050Notes = [
+  "## 小A 1.0.50",
+  "",
+  "- 修复聊天表格中 `<br>` 显示为文本的问题，正确显示单元格内换行。",
+  "- 修复百分比及坐标公式残留反斜杠或 `$` 的问题，保留普通金额和代码原文。",
+  "- 补齐 PDF 与 Word 工具目录的英文说明，支持中英切换并保留风险提示。",
+  "- 本次更新说明支持英文显示、动态加载和中英往返切换。",
+  "",
+  "升级前请正常退出小A，保留同目录完整 `XiaoA-data` 文件夹。禁止商业使用，许可见仓库 LICENSE。",
+  ""
+].join("\n");
+const englishRelease1050Notes = [
+  "## XiaoA 1.0.50",
+  "",
+  "- Fixed literal `<br>` text in chat tables so line breaks display correctly inside cells.",
+  "- Fixed stray backslashes and `$` delimiters in percentage and coordinate formulas while preserving ordinary monetary amounts and code.",
+  "- Completed English descriptions for PDF and Word tools, including Chinese/English switching and risk notices.",
+  "- These update notes support English display, dynamic loading and switching between Chinese and English.",
+  "",
+  "Before upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.",
+  ""
+].join("\n");
+for (const newline of ["\n", "\r\n"]) {
+  assert.equal(translate(release1050Notes.replace(/\n/g, newline), "en"), englishRelease1050Notes.replace(/\n/g, newline));
+  assert.equal(translate(release1050Notes.replace(/\n/g, newline), "zh"), release1050Notes.replace(/\n/g, newline));
+}
 for (const newline of ["\n", "\r\n"]) {
   assert.equal(translate(release1049Notes.replace(/\n/g, newline), "en"), englishRelease1049Notes.replace(/\n/g, newline));
   assert.equal(translate(release1049Notes.replace(/\n/g, newline), "zh"), release1049Notes.replace(/\n/g, newline));
@@ -388,6 +456,7 @@ for (const [source, expected] of [
   [latestReleaseNotes, englishLatestReleaseNotes],
   [release1048Notes, englishRelease1048Notes],
   [release1049Notes, englishRelease1049Notes],
+  [release1050Notes, englishRelease1050Notes],
 ]) {
   const body = element(), releaseNotes = element("DIV", {}, body);
   body.childNodes.push(releaseNotes);

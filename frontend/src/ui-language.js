@@ -413,6 +413,11 @@
   "便携版发布后，可在此检查 GitHub Releases 更新。": "Check GitHub Releases for portable updates after a version is published.",
   "## 小A 1.0.48": "## XiaoA 1.0.48",
   "## 小A 1.0.49": "## XiaoA 1.0.49",
+  "## 小A 1.0.50": "## XiaoA 1.0.50",
+  "修复聊天表格中 `<br>` 显示为文本的问题，正确显示单元格内换行。": "Fixed literal `<br>` text in chat tables so line breaks display correctly inside cells.",
+  "修复百分比及坐标公式残留反斜杠或 `$` 的问题，保留普通金额和代码原文。": "Fixed stray backslashes and `$` delimiters in percentage and coordinate formulas while preserving ordinary monetary amounts and code.",
+  "补齐 PDF 与 Word 工具目录的英文说明，支持中英切换并保留风险提示。": "Completed English descriptions for PDF and Word tools, including Chinese/English switching and risk notices.",
+  "本次更新说明支持英文显示、动态加载和中英往返切换。": "These update notes support English display, dynamic loading and switching between Chinese and English.",
   "语音唤醒旁新增停止播放按钮，可立即停止当前朗读；关闭语音唤醒时，同时停止回复和唤醒应答。": "Added a stop-playback button beside Voice wake-up to stop speech immediately. Turning off Voice wake-up also stops replies and the wake greeting.",
   "停止播放后，尚未完成的语音合成不会重新播放；任务和文字回复继续，下一轮语音对话可正常朗读。": "Pending speech synthesis no longer restarts playback after you stop it. Tasks and text replies continue, and speech resumes on the next voice conversation turn.",
   "优化麦克风录音的采样率转换和抗混叠处理，长录音优先在停顿处切段；识别文本仍可在发送前审阅。": "Improved microphone sample-rate conversion and anti-aliasing, with long recordings split at pauses where possible. You can still review recognized text before sending.",
@@ -1013,7 +1018,16 @@
   "cad_set_dimstyle": "Set the current dimension style.",
   "cad_slice_solid": "Slice a 3D solid.",
   "cad_trim": "Trim selected drawing entities at boundaries.",
-  "cad_update_dimstyle": "Update a dimension style."
+  "cad_update_dimstyle": "Update a dimension style.",
+  "word_list_paragraphs": "List body paragraphs in an existing .docx with their current indices, styles and text so content can be inserted at an actual heading. Results are paginated; table paragraphs are not included.",
+  "pdf_read_text": "Read PDF text page by page, up to 20,000 characters per call. Scanned PDFs without a text layer return an explicit empty-text result and note that OCR is required.",
+  "pdf_list_pages": "Check that a PDF exists and report its page count before treating it as processed.",
+  "pdf_extract_images": "Extract embedded images from a PDF to a specified folder and return their actual file paths. Only images already embedded in the PDF are extracted; scanned pages are not automatically OCRed.",
+  "pdf_render_pages": "Render specified PDF pages as PNG files and return their actual paths. Useful for scanned PDFs, drawings and visual inspection.",
+  "word_apply_replacements": "Apply multiple find-and-replace operations to the editable text of one .docx, including body text, tables, headers, footers and footnotes. A no-match result is normal and does not modify or save the document. Stops if the target is missing, open in Word/WPS, or contains macros, external links or complex field codes.",
+  "word_append_paragraphs": "Append a set of formal paragraphs directly to the end of an existing .docx and save it. This edits the original document rather than creating a replacement. Stops and reports if the target is missing, open or cannot be saved.",
+  "word_insert_paragraphs": "Insert paragraphs at a specified body position in an existing .docx, preserving the remaining body, tables and images. Re-reads the saved document to verify the result; does not create a replacement.",
+  "word_append_blocks": "Append structured sections, headings, body text, clauses, tables and images to an existing .docx using the project's Word formatting conventions, then re-read to verify. Does not create a replacement."
 };
   function toolDescription(tool) {
     if (!Object.hasOwn(TOOL_EN, tool.name)) return "";

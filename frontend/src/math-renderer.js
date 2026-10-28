@@ -15,11 +15,11 @@
         let formula = dollars ?? brackets ?? parentheses ?? inline;
         // Dollar amounts such as "$5 and $10" are ordinary prose, not math.
         if (inline !== undefined && (/\d/.test(text[offset + original.length] || "") ||
-            (!/\\[A-Za-z]+|[_^{}=<>+*/-]/.test(inline) && !/^(?:[\d.,]+|[A-Za-z])$/.test(inline.trim())))) return original;
+            (!/\\(?:[A-Za-z]+|[%,])|[_^{}=<>+*/-]/.test(inline) && !/^(?:[\d.,]+|[A-Za-z])$/.test(inline.trim())))) return original;
         if (formula.length > 8192 || /\\(?:href|url|includegraphics|html[A-Za-z]*)\b/.test(formula)) return original;
         // Some gateways double-escape unit/comparison commands; never alter matrix row breaks.
         if (!/\\begin\b/.test(formula)) {
-          formula = formula.replace(/\\\\(text|mathrm|textrm|textnormal|leq?|geq?|neq?|times|cdot|pm|mp|approx|frac|sqrt)\b/g, "\\$1");
+          formula = formula.replace(/\\\\(%|,|(?:text|mathrm|textrm|textnormal|leq?|geq?|neq?|times|cdot|pm|mp|approx|frac|sqrt)\b)/g, "\\$1");
         }
         try {
           const markup = katex.renderToString(formula, {

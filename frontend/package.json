@@ -1,6 +1,6 @@
 {
   "name": "desktop-agent-frontend",
-  "version": "1.0.49",
+  "version": "1.0.50",
   "description": "小A 桌面悬浮助手(Electron)",
   "main": "main.js",
   "author": "XiaoA",

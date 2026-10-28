@@ -24,12 +24,37 @@ for (const input of [String.raw`长度 $185\text{m}$、$158\\text{m}$`,
 }
 assert.match(render(String.raw`$\le 4\text{m}$`), /<mo>≤<\/mo>/);
 assert.match(render(String.raw`$4\\text{m}$`), /<mtext>m<\/mtext>/);
+for (const formula of [String.raw`$67\%$`, String.raw`$67\\%$`, String.raw`$(546294.03,\, 2393385.00)$`, String.raw`$(546294.03,\\, 2393385.00)$`, String.raw`**$67\\%$** and **$(546294.03,\\, 2393385.00)$**`]) {
+  const output = render(formula);
+  assert.match(output, /<math\b/, formula);
+  assert.doesNotMatch(output, /\$|\*\*|katex-error|<mspace linebreak="newline"/);
+  assert.equal(live(formula), output);
+}
 assert.match(render(String.raw`$23,971.34\text{m}^2$`), /<msup>/);
 assert.match(render(String.raw`\[\frac{1}{2}\]`), /<mfrac>/);
 assert.match(render(String.raw`$$\begin{matrix}a&b\\c&d\end{matrix}$$`), /<mtable\b/);
 assert.match(render(String.raw`**面积 $4\text{m}^2$**`), /<b>面积 <span class="chat-math">/);
 assert.match(render('| 面积 | 数量 |\n|---|---|\n| $x^2$ | 1 |'), /<td[^>]*><span class="chat-math">/);
-for (const prose of ['价格 $5 和 $10，合计 $15', 'Cost $5 and $10', '变量 $PATH 和 $HOME', String.raw`转义 \$5 和 \$10`]) {
+const htmlBreakTable = render('| A | B |\n|---|---|\n| first<br>second | value |');
+assert.match(htmlBreakTable, /<td[^>]*>first<br>second<\/td>/);
+assert.doesNotMatch(htmlBreakTable, /&lt;br/);
+assert.equal(render('plain <br/> break'), 'plain <br> break');
+const screenshotTable = String.raw`| Mode | Parameters |
+|---|---|
+| **2+1**<br>(two passes + one full pass)<br>standard | **$67\\%$** |
+| CAD | **$67\%$**<br>$(546294.03,\, 2393385.00)$ |`;
+assert.equal(live(screenshotTable), render(screenshotTable));
+assert.match(render(screenshotTable), /<b>2\+1<\/b><br>/);
+assert.equal((render(screenshotTable).match(/<math\b/g) || []).length, 3);
+assert.match(render(screenshotTable), /<mn>67<\/mn><mi mathvariant="normal">%<\/mi>/);
+assert.doesNotMatch(render(screenshotTable), /\$|&lt;br|katex-error|<mspace linebreak="newline"/);
+
+assert.equal(render('first<BR />second<br>third'), 'first<br>second<br>third');
+assert.equal(render('`<br>`'), '<code>&lt;br&gt;</code>');
+assert.equal(render('```html\n<br>\n```'), '<pre class="code">html\n&lt;br&gt;</pre>');
+assert.doesNotMatch(render('<br onclick="alert(1)"><br onmouseover=alert(1)><img src=x onerror=alert(1)>'), /<br|<img|<script/);
+
+for (const prose of ['价格 $5 和 $10，合计 $15', 'Cost $5 and $10', 'Budget: $1,000.00; total: $2,000.00', '$PATH', '变量 $PATH 和 $HOME', String.raw`转义 \$5 和 \$10`]) {
   assert.equal(render(prose), prose);
 }
 for (const code of ['`$x^2$`', '```latex\n$x^2$\n```']) {

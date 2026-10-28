@@ -2019,6 +2019,7 @@
       });
       // 3) 对剩余文本做 HTML 转义 + markdown 行内规则
       s = _escapeHtmlText(s);
+      s = s.replace(/&lt;br\s*\/?&gt;/gi, "<br>");
       s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>");
       s = s.replace(/^#{1,6}\s*(.+)$/gm, "<b>$1</b>");
       s = s.replace(/^\s*[-*]\s+/gm, "· ").replace(/^\s*(\d+)\.\s+/gm, "$1. ");
