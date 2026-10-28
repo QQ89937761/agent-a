@@ -392,6 +392,12 @@
   "电脑关机时，飞书消息仍由服务器上的 hub 独立处理；需要操作电脑的任务等 worker 开机后再执行。部署期间可关闭设置页，但请勿退出小A或关闭电脑；中断后会保留记录，请先检查云端状态。云端支持 Debian/Ubuntu + systemd，远程账号须为 root 或具有免密 sudo。": "The server hub handles Feishu messages even when this computer is off; desktop tasks wait for the worker. You may close Settings during deployment, but do not quit XiaoA or turn off the computer. Check cloud status after an interruption. Cloud requires Debian/Ubuntu with systemd, and root or passwordless sudo.",
   "便携版更新通过 GitHub Releases 发布；云端使用本机内置文件，更新云端前请先更新本机小A。开发版不会替换源码目录。": "Portable updates are published on GitHub Releases. Cloud updates use bundled local files; update local XiaoA first. Development source directories are never replaced.",
   "便携版发布后，可在此检查 GitHub Releases 更新。": "Check GitHub Releases for portable updates after a version is published.",
+  "“语音与对话”新增百度智能云识别与合成，保留腾讯云，分别保存服务商的密钥、音色和语速；百度无需 AppID。": "Baidu AI Cloud speech recognition and synthesis are now available under Speech & Conversation, alongside Tencent Cloud. Each provider keeps its own credentials, voice and speed; Baidu does not require an AppID.",
+  "增加大模型与精品中英混读音色，试听短句包含中文、英文及常见办公词汇；具体音色需账号开通相应权限。": "Added large-model and premium voices for mixed Chinese and English. Preview phrases include Chinese, English and common office terms; some voices require account permissions.",
+  "唤醒应答“我在”只使用已保存的云音色，首次等待预加载，切换服务商、音色或语速后刷新缓存；失败时提示并允许重试，不再切换系统声音。": "The “I’m here” wake response now uses only the saved cloud voice. It waits for the initial preload and refreshes its cache when the provider, voice or speed changes. Failures are reported with a retry option; it no longer falls back to a system voice.",
+  "微信、飞书保留原有连接与消息处理方式，音频识别适配器可在保存语音设置后生效；补充 Ogg Opus、MP3、WAV 转换支持和云端配置同步。": "WeChat and Feishu retain their existing connections and message handling. Audio transcription adapters take effect after saving speech settings; added Ogg Opus, MP3 and WAV conversion support, plus cloud configuration sync.",
+  "下载 `XiaoA.exe` 即可使用 Windows x64 便携版。升级前请正常退出小A，并保留原有 `data` 目录和配置。也可在小A内通过 GitHub Releases 更新通道升级。": "Download `XiaoA.exe` to use the Windows x64 portable edition. Before upgrading, exit XiaoA normally and keep the existing `data` folder and settings. You can also update through the GitHub Releases channel in XiaoA.",
+  "本项目按 PolyForm Noncommercial License 1.0.0 发布，禁止商业使用；商业用途需取得单独书面授权。": "This project is released under the PolyForm Noncommercial License 1.0.0. Commercial use is prohibited unless separately authorized in writing.",
   "暂无公开版本，请稍后再试。": "No public release is available yet. Please try again later.",
   "暂无公开版本": "No public release is available yet.",
   "当前监听地址对外开放但未设置网页密码；开机时后端会拒绝启动。请先设置下方网页访问密码。": "The listen address is public but no password is set; the backend will refuse to start at sign-in. Set a web access password below first.",
@@ -515,7 +521,33 @@
   "智萌 · 男童声": "Zhimeng · Boy",
   "智蓉 · 女声情感": "Zhirong · Expressive female",
   "智靖 · 男声情感": "Zhijing · Expressive male",
-  "智宁 · 男声播报": "Zhining · Male announcer"
+  "智宁 · 男声播报": "Zhining · Male announcer",
+  "度涵竹 · 开朗女声 · 4189": "Du Hanzhu · Cheerful female · 4189",
+  "度沁遥 · 知性女声 · 4197": "Du Qinyao · Refined female · 4197",
+  "度清影 · 甜美女声 · 4196": "Du Qingying · Sweet female · 4196",
+  "度泽言 · 开朗男声 · 4193": "Du Zeyan · Cheerful male · 4193",
+  "度怀安 · 磁性男声 · 4195": "Du Huaian · Deep male · 4195",
+  "度嫣然 · 活泼女声 · 4194": "Du Yanran · Lively female · 4194",
+  "度小鹿 · 甜美女声 · 5118": "Du Xiaolu · Sweet female · 5118",
+  "度博文 · 专业男声 · 106": "Du Bowen · Professional male · 106",
+  "度逍遥 · 情感男声 · 5003": "Du Xiaoyao · Expressive male · 5003",
+  "度小娇 · 成熟女声 · 5": "Du Xiaojiao · Mature female · 5",
+  "度米朵 · 可爱童声 · 103": "Du Miduo · Cute child voice · 103",
+  "度小童 · 童声主播 · 110": "Du Xiaotong · Child announcer · 110",
+  "度小萌 · 软萌女声 · 111": "Du Xiaomeng · Soft female · 111",
+  "度小美 · 标准女声 · 0": "Du Xiaomei · Standard female · 0",
+  "度小宇 · 亲切男声 · 1": "Du Xiaoyu · Friendly male · 1",
+  "度逍遥 · 情感男声 · 3": "Du Xiaoyao · Expressive male · 3",
+  "度丫丫 · 童声 · 4": "Du Yaya · Child voice · 4",
+  "删除已保存的腾讯云凭据": "Delete saved Tencent Cloud credentials",
+  "取消删除腾讯云凭据": "Cancel Tencent Cloud credential deletion",
+  "重试同步删除腾讯云凭据": "Retry Tencent Cloud credential deletion sync",
+  "本机凭据已删除；云端同步未完成，再次点击此按钮重试。": "Credentials were removed locally, but cloud sync failed. Click this button to retry.",
+  "确认删除已保存的腾讯云 SecretId 和 SecretKey？点击“保存此页”后才会清除。": "Delete the saved Tencent Cloud SecretId and SecretKey? They will be removed when you click “Save this page”.",
+  "腾讯云凭据由环境变量管理，请在启动环境中移除后再操作。": "Tencent Cloud credentials are managed by environment variables. Remove them from the launch environment first.",
+  "已标记删除；点击页面底部“保存此页”后才会清除。": "Marked for deletion. Click “Save this page” below to remove them.",
+  "删除腾讯云凭据": "Delete Tencent Cloud credentials",
+  "腾讯云凭据由环境变量管理，请在启动环境中移除对应变量后再清除": "Tencent Cloud credentials are managed by environment variables. Remove the variables from the launch environment first."
 });
   Object.assign(EN, {
   "停止任务": "Stop task",
@@ -958,10 +990,14 @@
   function translate(text, locale = language) {
     if (locale !== "en" || typeof text !== "string") return text;
     if (text.includes("\n")) {
-      const lines = text.split("\n");
-      if (lines.length > 1 && lines.every(line => !line.trim() || Object.hasOwn(EN, line.trim().replace(/\s+/g, " ")))) {
-        return lines.map(line => translate(line, locale)).join("\n");
-      }
+      const lines = text.split(/\r\n|\n|\r/);
+      const translated = lines.map(line => {
+        const match = /^( *)([-*] +)?(.*?)( *)$/.exec(line);
+        const key = match[3].trim().replace(/\s+/g, " ");
+        return !key ? line : Object.hasOwn(EN, key)
+          ? `${match[1]}${match[2] || ""}${EN[key]}${match[4]}` : null;
+      });
+      if (lines.length > 1 && translated.every(line => line !== null)) return translated.join(text.match(/\r\n|\n|\r/)?.[0] || "\n");
     }
     const key = text.trim().replace(/\s+/g, " ");
     if (Object.hasOwn(EN, key)) return text.replace(text.trim(), EN[key]);
@@ -1065,7 +1101,7 @@
   const initialText = new WeakSet();
   const ATTRS = ["title", "aria-label", "placeholder", "alt", "label"];
   const SKIP = "script, style, pre, code, textarea, [contenteditable], [data-no-i18n], #languageToggle, #status, #modelLabel, .model-picker:not(select), .bubble, .trace-hint, .confirm-args, .draft, .conversation-item-title, .attachment-name, .attachment-preview, .channel-account-name, .channel-account-label, .channel-account-remark, #cloud_deploy_logs, #extension_review_content, .audit-title";
-  const DYNAMIC = ".settings-shell, #settingsDialog, button, summary, label, legend, h1, h2, h3, .hint, .msg, .provider-block, .model-row, #voiceHint, #continuousLabel, #connectionNoticeText, #page_title, #page_subtitle, #err, .trace-title, .trace-meta, .trace-current, .trace-actions, .confirm-scope, .confirm-box > div:first-child";
+  const DYNAMIC = ".settings-shell, #settingsDialog, button, select, option, optgroup, summary, label, legend, h1, h2, h3, .hint, .msg, .provider-block, .model-row, #voiceHint, #continuousLabel, #connectionNoticeText, #page_title, #page_subtitle, #err, .trace-title, .trace-meta, .trace-current, .trace-actions, .confirm-scope, .confirm-box > div:first-child";
   // ponytail: exact local phrases on known UI labels; no global string replacement of chat/user data.
   function allowed(element) {
     // Only the empty-state label is UI text; deployment logs remain verbatim.

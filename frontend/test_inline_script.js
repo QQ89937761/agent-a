@@ -1202,6 +1202,13 @@ if (toggleCount !== 1) {
   assert.equal(elements.connectionNotice.hidden, true, 'late checks cannot overwrite a recovered connection');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
+assert.match(settingsHtml, /id="tc_secret_id" type="password" autocomplete="off"/);
+assert.match(settingsHtml, /id="tc_secret_key" type="password" autocomplete="off"/);
+assert.match(settingsHtml, /id="baidu_api_key" type="password" autocomplete="off"/);
+assert.match(settingsHtml, /id="baidu_secret_key" type="password" autocomplete="off"/);
+assert.match(settingsHtml, /clear_tencent_credentials: clearTencentCredentials/);
+assert.match(settingsHtml, /body: JSON\.stringify\(\{clear_tencent_credentials: clearTencentCredentials\}\)/);
+assert.match(settingsHtml, /tencentCredentialClearSaved/);
 // Use the actual provider/status function with independent credential fields.
 {
   const assert = require("node:assert/strict");

@@ -3155,6 +3155,7 @@ class SettingsRequest(BaseModel):
     baidu_secret_key: str = ""
     baidu_tts_voice: int | None = None
     baidu_tts_speed: int | None = None
+    clear_tencent_credentials: bool = False
     tc_secret_id: str = ""
     tc_secret_key: str = ""
     tc_region: str = ""
@@ -3190,7 +3191,7 @@ _SETTING_SECTION_FIELDS = {
         "memory_backup_dir", "memory_backup_interval_minutes", "memory_backup_keep_count",
     },
     "voice": {
-        "tc_secret_id", "tc_secret_key", "tc_region", "tts_voice",
+        "clear_tencent_credentials", "tc_secret_id", "tc_secret_key", "tc_region", "tts_voice",
         "speech_provider", "baidu_api_key", "baidu_secret_key", "baidu_tts_voice", "baidu_tts_speed",
     },
     "connections": {
@@ -3199,6 +3200,10 @@ _SETTING_SECTION_FIELDS = {
     },
     "system": {"web_password", "open_at_login", "isolation_max_mb"},
 }
+
+
+class CloudRuntimeSyncRequest(BaseModel):
+    clear_tencent_credentials: bool = False
 
 
 class ExtensionInstallRequest(BaseModel):
@@ -4558,7 +4563,7 @@ async def api_cloud_weixin_logout(request: Request) -> dict:
 
 
 @app.post("/api/cloud/runtime")
-async def api_cloud_runtime(request: Request) -> dict:
+async def api_cloud_runtime(request: Request, req: CloudRuntimeSyncRequest = CloudRuntimeSyncRequest()) -> dict:
     """同步云端实际需要的模型和腾讯语音配置；本机专属设置不会上传。"""
     if not _is_local(request.client.host if request.client else None):
         raise HTTPException(status_code=403, detail="云端设置只能在本机修改")
@@ -4585,6 +4590,8 @@ async def api_cloud_runtime(request: Request) -> dict:
         "AGENT_TTS_SPEED": str(CFG.voice.tts_speed),
         "AGENT_SCHEDULE_TASKS": SCHEDULER.sync_payload(),
     }
+    if req.clear_tencent_credentials:
+        values["AGENT_CLEAR_TENCENT_CREDENTIALS"] = "1"
     try:
         from backend.core import cloud_deploy as cloud_deployer
         await asyncio.to_thread(cloud_deployer.sync_runtime_settings, app_home(), values)
@@ -4699,6 +4706,8 @@ async def api_save_settings(req: SettingsRequest) -> dict:
         for value, low, high in ((req.tts_voice, 1, 999999), (req.baidu_tts_voice, 0, 999999), (req.baidu_tts_speed, 0, 15)):
             if value is not None and not low <= value <= high:
                 raise ValueError("音色编号或语速不正确")
+        if req.clear_tencent_credentials and any(os.getenv(name) for name in ("AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY")):
+            raise ValueError("腾讯云凭据由环境变量管理，请在启动环境中移除对应变量后再清除")
         if any(char in req.baidu_api_key + req.baidu_secret_key for char in "\r\n\0"):
             raise ValueError("百度语音密钥包含非法字符")
         if any(char in req.web_password for char in "\r\n\0"):
@@ -4821,10 +4830,14 @@ async def api_save_settings(req: SettingsRequest) -> dict:
                 setattr(CFG.voice, attr, getattr(req, attr))
         if req.tc_region:
             CFG.voice.region = req.tc_region.strip()
-        if _changed(req.tc_secret_id, CFG.voice.secret_id):
-            CFG.voice.secret_id = _normalize_tencent_credential(req.tc_secret_id, "SecretId")
-        if _changed(req.tc_secret_key, CFG.voice.secret_key):
-            CFG.voice.secret_key = _normalize_tencent_credential(req.tc_secret_key, "SecretKey")
+        if req.clear_tencent_credentials:
+            CFG.voice.secret_id = ""
+            CFG.voice.secret_key = ""
+        else:
+            if _changed(req.tc_secret_id, CFG.voice.secret_id):
+                CFG.voice.secret_id = _normalize_tencent_credential(req.tc_secret_id, "SecretId")
+            if _changed(req.tc_secret_key, CFG.voice.secret_key):
+                CFG.voice.secret_key = _normalize_tencent_credential(req.tc_secret_key, "SecretKey")
         # 有密钥就自动启用腾讯云
         if CFG.voice.secret_id and CFG.voice.secret_key and not CFG.voice.provider:
             CFG.voice.provider = "tencent"

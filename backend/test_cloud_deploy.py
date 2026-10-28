@@ -493,6 +493,18 @@ class HubEnvironmentUpdateTests(unittest.TestCase):
             self.assertIn(f"{key}={value}\n", updated)
         self.assertIn("AGENT_TENCENT_SECRET_ID=existing-example\n", updated)
 
+    def test_explicitly_clears_tencent_credentials_without_touching_baidu(self):
+        updated = update_environment(
+            "AGENT_TENCENT_SECRET_ID=old-id\nAGENT_TENCENT_SECRET_KEY=old-key\n"
+            "AGENT_BAIDU_API_KEY=baidu-example\n",
+            {"AGENT_CLEAR_TENCENT_CREDENTIALS": "1", "AGENT_TENCENT_SECRET_ID": "", "AGENT_TENCENT_SECRET_KEY": ""},
+        )
+        self.assertNotIn("AGENT_TENCENT_SECRET_ID=", updated)
+        self.assertNotIn("AGENT_TENCENT_SECRET_KEY=", updated)
+        self.assertIn("AGENT_BAIDU_API_KEY=baidu-example", updated)
+        with self.assertRaisesRegex(ValueError, "值无效"):
+            update_environment("", {"AGENT_CLEAR_TENCENT_CREDENTIALS": "yes"})
+
     def test_allowed_includes_tencent_voice_and_schedule(self):
         from deploy.update_hub_env import ALLOWED
         self.assertIn("AGENT_TENCENT_SECRET_ID", ALLOWED)

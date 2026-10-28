@@ -11,6 +11,28 @@ assert.equal(translate("模型可用 · 32ms", "en"), "Model available · 32ms")
 assert.equal(translate("上游返回 12 个模型，点击下拉框即可填入", "en"), "12 models found; choose one from the list");
 for (const value of ["自定义厂商", "gpt-4o", "D:\\项目\\报告.docx", "https://host/api", "__proto__", "constructor"]) assert.equal(translate(value, "en"), value);
 assert(Object.keys(EN).length > 300);
+const settingsHtml = fs.readFileSync("src/settings.html", "utf8");
+for (const selectId of ["tts_voice", "baidu_tts_voice"]) {
+  const start = settingsHtml.indexOf(`<select id="${selectId}">`);
+  const end = settingsHtml.indexOf("</select>", start);
+  assert(start >= 0 && end > start, `Missing voice select ${selectId}`);
+  const html = settingsHtml.slice(start, end);
+  for (const [, label] of html.matchAll(/<option\b[^>]*>([^<]+)<\/option>/g)) {
+    assert(EN[label], `Missing English voice label: ${label}`);
+  }
+  for (const [, label] of html.matchAll(/<optgroup\b[^>]*label="([^"]+)"/g)) {
+    assert(EN[label], `Missing English voice group: ${label}`);
+  }
+}
+for (const [source, expected] of [
+  ["推荐 · 大模型 · 中英混读（需相应权限）", "Recommended · Large-model · Chinese/English (permission required)"],
+  ["度涵竹 · 开朗女声 · 4189", "Du Hanzhu · Cheerful female · 4189"],
+  ["度沁遥 · 知性女声 · 4197", "Du Qinyao · Refined female · 4197"],
+  ["度小美 · 标准女声 · 0", "Du Xiaomei · Standard female · 0"],
+  ["智瑜 · 女声甜美", "Zhiyu · Sweet female"],
+  ["删除已保存的腾讯云凭据", "Delete saved Tencent Cloud credentials"],
+]) assert.equal(translate(source, "en"), expected);
+
 // Exercise real persistence and toggle code without adding a DOM dependency.
 function runtime(saved, blocked = false, content = null) {
   const nativeLanguages = [];
@@ -136,6 +158,29 @@ function appendText(parent, value) {
     assert.equal(option.getAttribute("value"), "未连接");
   }
 }
+{
+  const body = element();
+  const select = element("SELECT", {}, body); body.childNodes.push(select);
+  const group = element("OPTGROUP", {label:"推荐 · 大模型 · 中英混读（需相应权限）"}, select); select.childNodes.push(group);
+  const option = element("OPTION", {value:"4189"}, group); group.childNodes.push(option);
+  const label = appendText(option, "度涵竹 · 开朗女声 · 4189");
+  const app = runtime("zh", false, body);
+  app.window.XiaoALanguage.set("en");
+  assert.equal(group.getAttribute("label"), "Recommended · Large-model · Chinese/English (permission required)");
+  assert.equal(label.nodeValue, "Du Hanzhu · Cheerful female · 4189");
+  assert.equal(option.getAttribute("value"), "4189");
+  app.window.XiaoALanguage.set("zh");
+  assert.equal(group.getAttribute("label"), "推荐 · 大模型 · 中英混读（需相应权限）");
+  assert.equal(label.nodeValue, "度涵竹 · 开朗女声 · 4189");
+  // Options inserted after startup (for a saved voice absent from the catalogue) follow the same locale.
+  const fallback = element("OPTION", {value:"4200", "data-i18n-en":"Current voice 4200"}, select);
+  select.childNodes.push(fallback); const fallbackLabel = appendText(fallback, "当前音色 4200");
+  app.mutate([{type:"childList", addedNodes:[fallback]}]);
+  assert.equal(fallbackLabel.nodeValue, "当前音色 4200");
+  app.window.XiaoALanguage.set("en");
+  assert.equal(fallbackLabel.nodeValue, "Current voice 4200");
+  assert.equal(fallback.getAttribute("value"), "4200");
+}
 assert(/html\[data-language="en"\] \.settings-nav::before\s*\{ content: "XiaoA settings"; \}/.test(fs.readFileSync("src/settings.html", "utf8")));
 console.log("Settings language: dynamic lists, templates, bilingual labels, option values, placeholders, user data and round trips passed");
 
@@ -176,7 +221,6 @@ for (const name of cadNames) {
   assert(description, `Missing CAD English description: ${name}`);
   assert(!/[\u3400-\u9fff]/.test(description), name);
 }
-const settingsHtml = fs.readFileSync("src/settings.html", "utf8");
 const lockHint = settingsHtml.match(/在飞书或微信发一句「锁定」[\s\S]*?远程无法解锁|在飞书或微信发一句「锁定」[\s\S]*?是无效的。/)[0];
 const englishLockHint = translate(lockHint, "en");
 assert(englishLockHint.includes('“lock”') && englishLockHint.includes('“unlock”'));
@@ -260,6 +304,43 @@ const englishPublishedNotes = [
 assert.equal(translate(publishedNotes.join("\n"), "en"), englishPublishedNotes.join("\n"));
 assert.equal(translate(publishedNotes.join("\n"), "zh"), publishedNotes.join("\n"));
 assert.equal(translate("当前下载版更新了什么", "en"), "What’s new in this release");
+const latestReleaseNotes = [
+  "- “语音与对话”新增百度智能云识别与合成，保留腾讯云，分别保存服务商的密钥、音色和语速；百度无需 AppID。",
+  "- 增加大模型与精品中英混读音色，试听短句包含中文、英文及常见办公词汇；具体音色需账号开通相应权限。",
+  "- 唤醒应答“我在”只使用已保存的云音色，首次等待预加载，切换服务商、音色或语速后刷新缓存；失败时提示并允许重试，不再切换系统声音。",
+  "- 微信、飞书保留原有连接与消息处理方式，音频识别适配器可在保存语音设置后生效；补充 Ogg Opus、MP3、WAV 转换支持和云端配置同步。",
+  "",
+  "下载 `XiaoA.exe` 即可使用 Windows x64 便携版。升级前请正常退出小A，并保留原有 `data` 目录和配置。也可在小A内通过 GitHub Releases 更新通道升级。",
+  "",
+  "本项目按 PolyForm Noncommercial License 1.0.0 发布，禁止商业使用；商业用途需取得单独书面授权。",
+].join("\n");
+const englishLatestReleaseNotes = [
+  "- Baidu AI Cloud speech recognition and synthesis are now available under Speech & Conversation, alongside Tencent Cloud. Each provider keeps its own credentials, voice and speed; Baidu does not require an AppID.",
+  "- Added large-model and premium voices for mixed Chinese and English. Preview phrases include Chinese, English and common office terms; some voices require account permissions.",
+  "- The “I’m here” wake response now uses only the saved cloud voice. It waits for the initial preload and refreshes its cache when the provider, voice or speed changes. Failures are reported with a retry option; it no longer falls back to a system voice.",
+  "- WeChat and Feishu retain their existing connections and message handling. Audio transcription adapters take effect after saving speech settings; added Ogg Opus, MP3 and WAV conversion support, plus cloud configuration sync.",
+  "",
+  "Download `XiaoA.exe` to use the Windows x64 portable edition. Before upgrading, exit XiaoA normally and keep the existing `data` folder and settings. You can also update through the GitHub Releases channel in XiaoA.",
+  "",
+  "This project is released under the PolyForm Noncommercial License 1.0.0. Commercial use is prohibited unless separately authorized in writing.",
+].join("\n");
+assert.equal(translate(latestReleaseNotes, "en"), englishLatestReleaseNotes);
+assert.equal(translate(latestReleaseNotes, "zh"), latestReleaseNotes);
+assert.equal(translate(latestReleaseNotes.replace(/\n/g, "\r\n"), "en"), englishLatestReleaseNotes.replace(/\n/g, "\r\n"));
+{
+  const body = element(), releaseNotes = element("DIV", {}, body);
+  body.childNodes.push(releaseNotes);
+  releaseNotes.closest = selector => selector.startsWith("script, style") ? null
+    : selector.split(/,\s*/).includes(".hint") ? releaseNotes : null;
+  const app = runtime("en", false, body);
+  const noteText = appendText(releaseNotes, latestReleaseNotes);
+  app.mutate([{type:"childList", addedNodes:[noteText]}]);
+  assert.equal(noteText.nodeValue, englishLatestReleaseNotes);
+  app.window.XiaoALanguage.set("zh");
+  assert.equal(noteText.nodeValue, latestReleaseNotes);
+  app.window.XiaoALanguage.set("en");
+  assert.equal(noteText.nodeValue, englishLatestReleaseNotes);
+}
 for (const [line, expected] of [
   ["[08:05:27] 云端连接成功，worker 已上线", "[08:05:27] Cloud connected successfully; worker is online"],
   ["[08:05:17] 安装包上传完成，正在校验并创建回退点…", "[08:05:17] Package upload complete; verifying and creating a rollback point…"],

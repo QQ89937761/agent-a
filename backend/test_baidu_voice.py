@@ -163,6 +163,19 @@ class BaiduVoiceTests(unittest.IsolatedAsyncioTestCase):
                 baidu_secret_key=masked["baidu_secret_key_masked"]))
             self.assertTrue(result["ok"])
             self.assertEqual(c.voice.baidu_secret_key, "example-secret-key")
+            result = await server.api_save_settings_section("voice", server.SettingsRequest(
+                speech_provider="baidu", clear_tencent_credentials=True))
+            self.assertTrue(result["ok"], result)
+            restored = load_config(Path(tmp)/"config.toml")
+            self.assertEqual((restored.voice.secret_id, restored.voice.secret_key), ("", ""))
+            self.assertEqual(restored.voice.baidu_secret_key, "example-secret-key")
+            c.voice.secret_id = "managed-example-id"; c.voice.secret_key = "managed-example-key"
+            with patch.dict(os.environ, {"AGENT_TENCENT_SECRET_ID": "managed-example-id"}, clear=True):
+                result = await server.api_save_settings_section("voice", server.SettingsRequest(
+                    clear_tencent_credentials=True))
+            self.assertFalse(result["ok"])
+            self.assertEqual((c.voice.secret_id, c.voice.secret_key),
+                             ("managed-example-id", "managed-example-key"))
 
     async def test_preview_zero_provider_mismatch_and_save_rollback(self):
         from backend.api import server

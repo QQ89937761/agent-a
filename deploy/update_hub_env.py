@@ -14,6 +14,7 @@ ALLOWED = {
     "AGENT_LLM_PROVIDER_NAME", "AGENT_LLM_CONTEXT_WINDOWS", "AGENT_CONTEXT_WINDOW",
     "AGENT_LLM_PROTOCOL", "AGENT_LLM_BASE_URL", "AGENT_LLM_API_KEY", "AGENT_CHAT_MODEL", "AGENT_MODEL_OPTIONS",
     "AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY", "AGENT_TENCENT_REGION",
+    "AGENT_CLEAR_TENCENT_CREDENTIALS",
     "AGENT_TTS_VOICE", "AGENT_TTS_SPEED",
     "AGENT_SPEECH_PROVIDER", "AGENT_BAIDU_API_KEY", "AGENT_BAIDU_SECRET_KEY",
     "AGENT_BAIDU_TTS_VOICE", "AGENT_BAIDU_TTS_SPEED",
@@ -47,11 +48,20 @@ def update_environment(text: str, values: dict[str, str]) -> str:
             if name == "AGENT_LLM_PROVIDER_API_KEYS" and any(
                     not isinstance(key, str) or not isinstance(value, str) for key, value in parsed.items()):
                 raise ValueError(f"{name} 必须为字符串键值对")
+    clear_tencent = values.get("AGENT_CLEAR_TENCENT_CREDENTIALS", "") == "1"
+    if values.get("AGENT_CLEAR_TENCENT_CREDENTIALS", "") not in {"", "1"}:
+        raise ValueError("AGENT_CLEAR_TENCENT_CREDENTIALS 的值无效")
     # Remove the deprecated split vision setting so old cloud environments
     # cannot keep selecting a deleted model after a sync.
     legacy_voice = ("AGENT_TTS_PROVIDER=", "AGENT_VOICE_PROVIDER=", "AGENT_GROK_")
-    lines = [line for line in text.splitlines() if not line.startswith(("AGENT_VISION_MODEL=", *legacy_voice))]
+    remove_names = {"AGENT_TENCENT_SECRET_ID=", "AGENT_TENCENT_SECRET_KEY="} if clear_tencent else set()
+    lines = [line for line in text.splitlines()
+             if not line.startswith(("AGENT_VISION_MODEL=", *legacy_voice, *remove_names))]
     for name, raw_value in values.items():
+        if name == "AGENT_CLEAR_TENCENT_CREDENTIALS":
+            continue
+        if clear_tencent and name in {"AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY"}:
+            continue
         value = str(raw_value)
         if any(char in value for char in "\r\n\0"):
             raise ValueError(f"{name} 包含非法字符")
