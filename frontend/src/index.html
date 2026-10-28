@@ -279,6 +279,11 @@
       background: var(--code-bg); border-radius: 4px; padding: 1px 5px;
       font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px;
     }
+    .local-file-link { color: var(--brand); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+    .local-file-link:hover { color: var(--ink); }
+    .local-file-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+    .local-file-link[aria-busy="true"] { cursor: progress; }
+    .local-file-error { display: block; color: var(--danger); font-size: 12px; margin-top: 4px; }
     .bubble pre.code, .trace-entry pre.code {
       background: var(--code-bg); border-radius: 8px; padding: 10px 12px; margin: 6px 0;
       font-family: ui-monospace, monospace; font-size: 12.5px; overflow-x: auto;
@@ -689,6 +694,39 @@
       .composer-left { overflow-x: auto; }
       .capsule { max-width: 150px; }
     }
+    #chatViewport { position: relative; flex: 1; min-height: 0; display: flex; }
+    #log { min-width: 0; padding-right: 56px; }
+    #messageNavigator {
+      position: absolute; z-index: 3; right: 12px; top: 50%; transform: translateY(-50%);
+      display: flex; width: 36px; max-width: calc(100% - 24px); max-height: min(360px, 80%);
+      border: 1px solid transparent; border-radius: var(--radius);
+      transition: width .18s ease, background .18s ease, box-shadow .18s ease;
+    }
+    #messageNavigator[hidden] { display: none; }
+    #messageNavigator:hover, #messageNavigator:focus-within {
+      width: 340px; background: var(--panel); border-color: var(--line);
+      box-shadow: 0 14px 32px rgba(25, 42, 66, .16);
+    }
+    .message-nav-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+      overscroll-behavior: contain; scrollbar-width: none; padding: 8px 0; }
+    .message-nav-list::-webkit-scrollbar { display: none; }
+    .message-nav-item {
+      display: flex; align-items: center; justify-content: flex-end; gap: 0;
+      width: 100%; height: 28px; min-height: 28px; padding: 0 8px; margin: 0;
+      border: 0; border-radius: 6px; background: transparent; color: var(--ink-soft);
+      font: inherit; font-size: 13px; text-align: right; cursor: pointer;
+    }
+    #messageNavigator:hover .message-nav-item, #messageNavigator:focus-within .message-nav-item { gap: 12px; }
+    .message-nav-item::after { content: ""; flex: none; width: 10px; height: 2px;
+      border-radius: 2px; background: var(--scrollbar-thumb); transition: width .18s ease, background .18s ease; }
+    .message-nav-item[aria-current="true"] { color: var(--ink); }
+    .message-nav-item[aria-current="true"]::after { width: 18px; background: var(--ink); }
+    .message-nav-item:hover { background: var(--brand-soft); color: var(--ink); }
+    .message-nav-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+    .message-nav-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      opacity: 0; transition: opacity .15s ease; }
+    #messageNavigator:hover .message-nav-label, #messageNavigator:focus-within .message-nav-label { opacity: 1; }
+    @media (max-width: 620px) { #chatViewport #log { padding-right: 52px; } #messageNavigator { right: 8px; } }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; scroll-behavior: auto !important; }
     }
@@ -713,7 +751,7 @@
     :root[data-background="transparent"] header .status { background: var(--panel); border-radius: var(--radius); }
     /* 全透明模式：仅背景色使用 70% 不透明度，文字/图标/内容不使用 opacity。 */
     :root[data-background="transparent"] { --surface-opacity: 70%; }
-    :root[data-background="transparent"] :is(.assistant .bubble, .composer-shell, .composer-menu, .md-table, #scrollToBottom, header .status) {
+    :root[data-background="transparent"] :is(.assistant .bubble, .composer-shell, .composer-menu, .md-table, #scrollToBottom, #messageNavigator:hover, #messageNavigator:focus-within, header .status) {
       background: color-mix(in srgb, var(--panel) var(--surface-opacity), transparent);
     }
     :root[data-background="transparent"] .user .bubble {
@@ -878,7 +916,12 @@
     <button id="retryConnection" type="button">重新连接</button>
     <a id="connectionLogin" href="/login" hidden>重新登录</a>
   </div>
-  <div id="log"></div>
+  <div id="chatViewport">
+    <div id="log"></div>
+    <nav id="messageNavigator" aria-label="消息定位" hidden>
+      <div class="message-nav-list"></div>
+    </nav>
+  </div>
   <aside id="conversationPanel" hidden aria-label="多任务与对话">
     <div class="conversation-panel-head">
       <span class="conversation-panel-title">多任务与对话</span>
@@ -947,6 +990,7 @@
 
   <script src="./ui-language.js"></script>
   <script src="./markdown-table.js"></script>
+  <script src="./chat-navigator.js"></script>
   <script>
     // Electron 里是 file:// 协议,固定连本机;浏览器版用当前 host
     const IS_LOCAL_FILE = location.protocol === "file:" || !location.host;
@@ -956,6 +1000,7 @@
     let voiceCloud = false; // 后端是否配了云语音
     const log = document.getElementById("log");
     const scrollToBottomBtn = document.getElementById("scrollToBottom");
+    const messageNavigator = window.createChatNavigator(log, document.getElementById("messageNavigator"));
     const statusEl = document.getElementById("status");
     const textEl = document.getElementById("text");
     const sendBtn = document.getElementById("send");
@@ -1903,6 +1948,35 @@
     // 关键:先把代码块和行内 code 整段摘出来占位,只对"非代码"文本跑 markdown 规则,
     // 最后把代码原样(仅 HTML 转义)回填。这样代码里的 # * - 不会被当 markdown 破坏。
     // 所有内容(含代码)都先经 HTML 转义,杜绝 XSS(模型输出/工具结果/消息原文都不可信)。
+    const LOCAL_DOCUMENT_EXT = "(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|tsv|rtf|odt|ods|odp|png|jpe?g|gif|webp|bmp|tiff?|svg|dwg|dxf|mp3|wav|m4a|mp4)";
+    function renderLocalFilePath(value) {
+      if (!window.bridge?.openLocalFile || !/^[A-Za-z]:[\\/]/.test(value) || /[<>"|?*\r\n\x00-\x1f]/.test(value) || !new RegExp("\\." + LOCAL_DOCUMENT_EXT + "$", "i").test(value)) return null;
+      const label = window.XiaoALanguage?.translate("打开文件") || "打开文件";
+      return `<a class="local-file-link" href="#" data-local-path="${escapeHtml(value)}" title="${escapeHtml(label)}"><code>${_escapeHtmlText(value)}</code></a>`;
+    }
+    log.addEventListener("click", async event => {
+      const link = event.target.closest(".local-file-link");
+      if (!link) return;
+      event.preventDefault();
+      if (link.getAttribute("aria-busy") === "true") return;
+      link.setAttribute("aria-busy", "true");
+      const oldError = link.nextElementSibling;
+      if (oldError?.classList.contains("local-file-error")) oldError.remove();
+      try {
+        const result = await window.bridge.openLocalFile(link.dataset.localPath);
+        if (!result?.ok) throw new Error(result?.error || "无法打开文件，请确认文件仍在原位置。");
+      } catch (error) {
+        const message = document.createElement("span");
+        message.className = "local-file-error";
+        message.setAttribute("role", "alert");
+        const detail = String(error.message || "无法打开文件，请确认文件仍在原位置。");
+        message.textContent = window.XiaoALanguage?.translate(detail) || detail;
+        link.after(message);
+      } finally {
+        link.removeAttribute("aria-busy");
+      }
+    });
+
     function renderMarkdown(text) {
       const blocks = [];
       let s = String(text || "");
@@ -1915,7 +1989,14 @@
       // 2) 再抽出行内 `code`
       s = s.replace(/`([^`\n]+)`/g, (_, code) => {
         const i = blocks.length;
-        blocks.push(`<code>${_escapeHtmlText(code)}</code>`);
+        blocks.push(renderLocalFilePath(code) || `<code>${_escapeHtmlText(code)}</code>`);
+        return `XIAOACODEPLACEHOLDER${i}END`;
+      });
+      s = s.replace(/^(?:[ \t]*)([A-Za-z]:[\\/][^\r\n]+?)[ \t]*$/gm, (line, filePath) => {
+        const link = renderLocalFilePath(filePath);
+        if (!link) return line;
+        const i = blocks.length;
+        blocks.push(link);
         return `XIAOACODEPLACEHOLDER${i}END`;
       });
       // 3) 对剩余文本做 HTML 转义 + markdown 行内规则
@@ -2038,7 +2119,8 @@
       }
       appendAttachments(b, attachments);
       log.appendChild(wrap);
-      scrollToBottom();
+      if (role === "user" || !messageNavigator.isBrowsing()) scrollToBottom();
+      else updateScrollToBottomButton();
       return wrap;
     }
 
@@ -2104,12 +2186,13 @@
     }
 
     function scrollToBottom(smooth = false) {
-      if (smooth) log.scrollTo({top: log.scrollHeight, behavior: "smooth"});
+      messageNavigator.followLatest();
+      if (smooth) log.scrollTo({top: log.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"});
       else log.scrollTop = log.scrollHeight;
       updateScrollToBottomButton();
       if (smooth) return;
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        log.scrollTop = log.scrollHeight;
+        if (!messageNavigator.isBrowsing()) log.scrollTop = log.scrollHeight;
         updateScrollToBottomButton();
       }));
     }
@@ -2117,7 +2200,7 @@
     scrollToBottomBtn.onclick = () => scrollToBottom(true);
     log.addEventListener("scroll", updateScrollToBottomButton, {passive: true});
     window.addEventListener("resize", () => {
-      if (isLogNearBottom()) scrollToBottom();
+      if (!messageNavigator.isBrowsing() && isLogNearBottom()) scrollToBottom();
       else updateScrollToBottomButton();
     });
 
@@ -2125,7 +2208,7 @@
       const syncVisualViewport = () => {
         // pinch zoom 由浏览器处理，避免放大时反复重排界面。
         if (Math.abs(window.visualViewport.scale - 1) > 0.01) return;
-        const nearBottom = isLogNearBottom();
+        const nearBottom = !messageNavigator.isBrowsing() && isLogNearBottom();
         document.documentElement.style.setProperty("--app-height", `${window.visualViewport.height}px`);
         document.documentElement.style.setProperty("--app-top", `${window.visualViewport.offsetTop}px`);
         closeComposerMenus();
@@ -2138,7 +2221,7 @@
 
     // 只有当用户已经贴近底部时才自动跟随滚动;他手动往上翻看历史时不打扰。
     function scrollIfNear() {
-      if (isLogNearBottom()) scrollToBottom();
+      if (!messageNavigator.isBrowsing() && isLogNearBottom()) scrollToBottom();
       else updateScrollToBottomButton();
     }
 
@@ -2321,7 +2404,7 @@
         const entry = document.createElement("div"); entry.className = `trace-entry ${item.kind}`;
         if (item.kind === "tool") {
           entry.dataset.status = item.status;
-          const states = {done: "✓", failed: "失败", running: "执行中", waiting: "待确认", stopped: "已停止", interrupted: "已中断"};
+          const states = {done: "✓", skipped: "已跳过", failed: "失败", running: "执行中", waiting: "待确认", stopped: "已停止", interrupted: "已中断"};
           entry.textContent = `${item.step ? `第 ${item.step} 步 · ` : ""}${states[item.status] || "操作"} · ${TOOL_LABEL[item.name] || item.name}`;
           if (item.tool_ms != null) entry.textContent += ` · ${traceDuration(item.tool_ms)}`;
           if (item.hint || item.summary) {
@@ -2501,7 +2584,7 @@
       d.querySelector(".nm").textContent = label;
       d.querySelector(".ht").textContent = hint ? String(hint).slice(0, 40) : "";
       log.appendChild(d);
-      log.scrollTop = log.scrollHeight;
+      scrollIfNear();
     }
 
     // 全屏遮罩放大看图,点一下关闭
@@ -2536,7 +2619,7 @@
       wrap.appendChild(cap); wrap.appendChild(img);
       const parent = typeof currentTaskCard !== "undefined" && currentTaskCard ? currentTaskCard.process : log;
       parent.appendChild(wrap);
-      log.scrollTop = log.scrollHeight;
+      scrollIfNear();
     }
 
     let historyLoaded = false;
@@ -2577,7 +2660,9 @@
           // 结果只在出错时显示;成功的一笔带过(步骤条已经说明在做什么了)。
           // 例外:cad_* 改图工具返回 saved_as/backup/summary,存成哪个格式/备份在哪
           // 对交付图纸是要紧事,这里单独亮出来。
-          if (!d.ok) {
+          if (d.skipped || d.interrupted) {
+            addEvent("", "已跳过尚未开始的旧操作，按插话调整任务。");
+          } else if (!d.ok) {
             addToolFailure(d);
           } else if (!currentTaskCard && d.name && d.name.startsWith("cad_")) {
             try {
@@ -2699,8 +2784,12 @@
           }
           addEvent("", d.confirmation_cancelled
             ? "已插入；刚才等待确认的操作已取消，小A会按新要求继续。"
-            : `已收到你的插话；当前${TOOL_LABEL[currentTaskCard?.trace.current] || currentTaskCard?.trace.current || "操作"}仍在执行，完成或超时返回后会处理。`);
+            : "已收到你的插话，正在切换到新要求；若有操作正在执行，会在安全返回后调整。");
           statusEl.textContent = "已插入新要求…";
+          break;
+        case "interjection_applied":
+          addEvent("", "已采用新的补充要求，保留已完成进度。");
+          statusEl.textContent = "正在按插话调整任务";
           break;
         case "dequeued":
           addEvent("", `开始处理排队的:${(d.text || "").slice(0, 30)}`);
@@ -2819,7 +2908,7 @@
         box.remove();
       };
       log.appendChild(box);
-      log.scrollTop = log.scrollHeight;
+      scrollIfNear();
     }
 
     // 触发执行保护:显示"继续"按钮,点一下从断点接着干
@@ -2855,7 +2944,7 @@
       };
       box.querySelector(".btn-deny").onclick = () => box.remove();
       log.appendChild(box);
-      log.scrollTop = log.scrollHeight;
+      scrollIfNear();
     }
 
     const CONFIRM_TRUNCATION_NOTICE = "…（已截断，完整内容见日志）";
@@ -2909,7 +2998,7 @@
         box.remove();
       };
       log.appendChild(box);
-      log.scrollTop = log.scrollHeight;
+      scrollIfNear();
     }
 
     function setBusy(busy) {

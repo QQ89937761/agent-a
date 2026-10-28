@@ -46,6 +46,17 @@ def _isolate_desktop_history(test):
 
 
 class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_chat_navigation_asset_is_served_and_packaged(self):
+        response = await server.chat_navigator_script()
+        path = Path(response.path)
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.name, "chat-navigator.js")
+        self.assertEqual(response.media_type, "text/javascript")
+        self.assertTrue(any(route.path == "/chat-navigator.js" for route in server.app.routes))
+        root = Path(__file__).resolve().parents[1]
+        package = json.loads((root / "frontend/package.json").read_text(encoding="utf-8"))
+        self.assertIn("src/chat-navigator.js", package["build"]["files"])
+
     async def test_websocket_response_language_follows_each_task_and_checkpoint(self):
         calls = []
 
@@ -2186,6 +2197,18 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("model-new,model-second", values["AGENT_MODEL_OPTIONS"])
         self.assertEqual("voice-id", values["AGENT_TENCENT_SECRET_ID"])
         self.assertEqual("601003", values["AGENT_TTS_VOICE"])
+
+    async def test_cloud_runtime_sync_passes_explicit_credential_deletions(self):
+        local = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+        for tencent, baidu in ((False, True), (True, False), (True, True), (False, False)):
+            with patch.object(server, "CFG", Config()), \
+                 patch("backend.core.cloud_deploy.sync_runtime_settings") as sync:
+                result = await server.api_cloud_runtime(local, server.CloudRuntimeSyncRequest(
+                    clear_tencent_credentials=tencent, clear_baidu_credentials=baidu))
+            self.assertTrue(result["ok"], result)
+            values = sync.call_args.args[1]
+            self.assertEqual(values.get("AGENT_CLEAR_TENCENT_CREDENTIALS"), "1" if tencent else None)
+            self.assertEqual(values.get("AGENT_CLEAR_BAIDU_CREDENTIALS"), "1" if baidu else None)
 
     async def test_worker_channel_lock_reads_and_unlocks_cloud_scope(self):
         cfg = Config()

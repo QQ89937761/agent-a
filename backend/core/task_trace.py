@@ -91,7 +91,7 @@ def consume(trace: dict, kind: str, data: dict) -> bool:
                      if item["kind"] == "tool" and item["name"] == data.get("name")
                      and item["status"] in {"running", "waiting", "stopped"}), None)
         if item is not None:
-            item["status"] = "done" if data.get("ok", True) else "failed"
+            item["status"] = "skipped" if data.get("skipped") else "done" if data.get("ok", True) else "failed"
             item["duration_ms"] = max(0, now - item["ts"])
             if "tool_ms" in data:
                 item["tool_ms"] = max(0, int(data["tool_ms"]))
@@ -118,6 +118,10 @@ def consume(trace: dict, kind: str, data: dict) -> bool:
             trace["events"][-1]["status"] = "waiting"
     elif kind == "error":
         event = {"kind": "error", "text": _text(data.get("msg") or "执行出错"), "ts": now}
+    elif kind == "interjection_applied":
+        trace["status"] = "running"
+        trace["current"] = "正在按插话调整任务"
+        event = {"kind": "notice", "text": "已采用新的补充要求，保留已完成进度。", "ts": now}
     elif kind == "notice":
         event = {"kind": "notice", "text": _text(data.get("text") or ""), "ts": now}
     elif kind == "screenshot":

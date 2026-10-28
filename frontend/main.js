@@ -490,6 +490,30 @@ ipcMain.on("reveal-path", (_e, filePath) => {
   } catch (e) { /* ignore */ }
 });
 
+// Open documents only after a click in the trusted chat window.
+ipcMain.handle("open-local-file", async (event, filePath) => {
+  if (!chatWin || chatWin.isDestroyed() || event.sender !== chatWin.webContents) {
+    return { ok: false, error: "只能从小A对话窗口打开文件。" };
+  }
+  try {
+    if (typeof filePath !== "string" || filePath.length > 32767 ||
+        !/^[A-Za-z]:[\\/]/.test(filePath) || /[<>"|?*:\x00-\x1f]/.test(filePath.slice(2))) {
+      return { ok: false, error: "文件路径无效。" };
+    }
+    const resolved = path.win32.normalize(filePath);
+    const allowed = new Set([".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pdf", ".txt", ".md", ".csv", ".tsv", ".rtf", ".odt", ".ods", ".odp", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg", ".dwg", ".dxf", ".mp3", ".wav", ".m4a", ".mp4"]);
+    if (!allowed.has(path.win32.extname(resolved).toLowerCase())) {
+      return { ok: false, error: "此处仅支持打开文档、图片和音视频文件。" };
+    }
+    const stat = await fs.promises.stat(resolved);
+    if (!stat.isFile()) return { ok: false, error: "此路径不是文件。" };
+    const error = await shell.openPath(resolved);
+    return error ? { ok: false, error: "打开失败，请确认已安装可打开此文件的应用。" } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.code === "ENOENT" ? "文件不存在，可能已移动或删除。" : "无法打开文件，请确认文件仍在原位置。" };
+  }
+});
+
 // 后端进程句柄(打包成 exe 后由本程序拉起后端,不用再单独跑 bat)
 let backendProc = null;
 let backendProbeInFlight = false;

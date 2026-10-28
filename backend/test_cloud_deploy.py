@@ -505,6 +505,27 @@ class HubEnvironmentUpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "值无效"):
             update_environment("", {"AGENT_CLEAR_TENCENT_CREDENTIALS": "yes"})
 
+    def test_explicitly_clears_baidu_credentials_and_preserves_other_settings(self):
+        original = ("AGENT_BAIDU_API_KEY=old-api\nAGENT_BAIDU_SECRET_KEY=old-secret\n"
+                    "AGENT_TENCENT_SECRET_ID=tc-id\nAGENT_TENCENT_SECRET_KEY=tc-key\n"
+                    "AGENT_BAIDU_TTS_VOICE=4189\nAGENT_BAIDU_TTS_SPEED=5\n")
+        for both in (False, True):
+            values = {"AGENT_CLEAR_BAIDU_CREDENTIALS": "1", "AGENT_BAIDU_API_KEY": "stale-api",
+                      "AGENT_BAIDU_SECRET_KEY": "stale-secret"}
+            if both:
+                values["AGENT_CLEAR_TENCENT_CREDENTIALS"] = "1"
+            updated = update_environment(original, values)
+            self.assertNotIn("AGENT_BAIDU_API_KEY=", updated)
+            self.assertNotIn("AGENT_BAIDU_SECRET_KEY=", updated)
+            self.assertNotIn("AGENT_CLEAR_", updated)
+            self.assertIn("AGENT_BAIDU_TTS_VOICE=4189", updated)
+            self.assertIn("AGENT_BAIDU_TTS_SPEED=5", updated)
+            self.assertEqual("AGENT_TENCENT_SECRET_ID=tc-id" in updated, not both)
+            self.assertEqual("AGENT_TENCENT_SECRET_KEY=tc-key" in updated, not both)
+        self.assertEqual(update_environment(original, {"AGENT_CLEAR_BAIDU_CREDENTIALS": ""}), original)
+        with self.assertRaises(ValueError):
+            update_environment(original, {"AGENT_CLEAR_BAIDU_CREDENTIALS": "yes"})
+
     def test_allowed_includes_tencent_voice_and_schedule(self):
         from deploy.update_hub_env import ALLOWED
         self.assertIn("AGENT_TENCENT_SECRET_ID", ALLOWED)

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import unittest
 import os
+import asyncio
+import base64
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -73,6 +76,89 @@ class StaleOnceBrowser(FakeBrowser):
 
 
 class BrowserControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tab_actions_accept_plain_text_and_update_state(self):
+        for action, body in [("activate", "Target activated"), ("close", "Target is closing")]:
+            with self.subTest(action=action):
+                browser = BrowserController(Path("."))
+                browser._active_target = "tab-1"
+                browser._refs["B1"] = {"target_id": "tab-1"}
+
+                def respond(request):
+                    self.assertEqual("GET", request.method)
+                    self.assertEqual(f"/json/{action}/tab-1", request.url.path)
+                    return browser_module.httpx.Response(200, text=body)
+
+                client = browser_module.httpx.AsyncClient(
+                    transport=browser_module.httpx.MockTransport(respond), trust_env=False,
+                )
+                with patch.object(browser_module.httpx, "AsyncClient", return_value=client):
+                    result = await browser.tabs(action, "tab-1")
+                self.assertTrue(result["ok"])
+                self.assertEqual("tab-1" if action == "activate" else "", browser._active_target)
+                if action == "close":
+                    self.assertEqual({}, browser._refs)
+
+    async def test_json_endpoints_still_reject_invalid_json(self):
+        browser = BrowserController(Path("."))
+        client = browser_module.httpx.AsyncClient(transport=browser_module.httpx.MockTransport(
+            lambda request: browser_module.httpx.Response(200, text="unexpected text"),
+        ), trust_env=False)
+        with patch.object(browser_module.httpx, "AsyncClient", return_value=client):
+            with self.assertRaises(json.JSONDecodeError):
+                await browser._http("GET", "/json/version")
+
+    async def test_failed_close_does_not_clear_active_target_or_refs(self):
+        browser = BrowserController(Path("."))
+        browser._active_target = "tab-1"
+        browser._refs["B1"] = {"target_id": "tab-1"}
+        client = browser_module.httpx.AsyncClient(transport=browser_module.httpx.MockTransport(
+            lambda request: browser_module.httpx.Response(404, text="No such target id"),
+        ), trust_env=False)
+        with patch.object(browser_module.httpx, "AsyncClient", return_value=client):
+            with self.assertRaises(browser_module.httpx.HTTPStatusError):
+                await browser.tabs("close", "tab-1")
+        self.assertEqual("tab-1", browser._active_target)
+        self.assertIn("B1", browser._refs)
+
+    async def test_cdp_timeouts_include_method_and_duration(self):
+        browser = BrowserController(Path("."))
+        socket = SimpleNamespace(send=AsyncMock(), recv=AsyncMock(side_effect=TimeoutError()))
+        with self.assertRaisesRegex(TimeoutError, r"Page.captureScreenshot.*15"):
+            await browser._cdp_request(socket, 1, "Page.captureScreenshot")
+        socket.recv.assert_awaited_once()
+        with patch.object(browser_module.time, "monotonic", side_effect=[0, 16]):
+            with self.assertRaisesRegex(TimeoutError, r"Page.captureScreenshot.*15"):
+                await browser._cdp_request(socket, 2, "Page.captureScreenshot")
+
+    async def test_screenshot_retries_timeout_using_viewport_capture(self):
+        with TemporaryDirectory() as tmp:
+            browser = FakeBrowser()
+            payload = b"test screenshot bytes"
+            browser._cdp = AsyncMock(side_effect=[TimeoutError(), {
+                "data": base64.b64encode(payload).decode(),
+            }])
+            with patch.object(browser_module.isolation_workspace, "workspace", return_value=Path(tmp)):
+                result = await browser.screenshot()
+            self.assertTrue(result["ok"])
+            self.assertEqual(payload, Path(result["path"]).read_bytes())
+            self.assertEqual([True, False], [call.args[2]["fromSurface"] for call in browser._cdp.await_args_list])
+
+    async def test_repeated_screenshot_timeout_is_actionable_and_bounded(self):
+        browser = FakeBrowser()
+        browser._cdp = AsyncMock(side_effect=TimeoutError())
+        with self.assertRaisesRegex(TimeoutError, "截图超时.*browser_snapshot"):
+            await browser.screenshot()
+        self.assertEqual(2, browser._cdp.await_count)
+
+    async def test_screenshot_does_not_retry_cancellation_or_other_errors(self):
+        for error in [asyncio.CancelledError(), RuntimeError("Target closed")]:
+            with self.subTest(error=type(error).__name__):
+                browser = FakeBrowser()
+                browser._cdp = AsyncMock(side_effect=error)
+                with self.assertRaises(type(error)):
+                    await browser.screenshot()
+                browser._cdp.assert_awaited_once()
+
     async def test_download_session_survives_tool_calls_and_reconnects(self):
         with TemporaryDirectory() as tmp:
             browser = BrowserController(Path(tmp) / "profile")

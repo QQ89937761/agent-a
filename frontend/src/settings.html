@@ -781,6 +781,8 @@
     <input id="baidu_api_key" type="password" autocomplete="off" placeholder="请输入百度语音应用 API Key" />
     <label for="baidu_secret_key">Secret Key</label>
     <input id="baidu_secret_key" type="password" autocomplete="off" placeholder="请输入百度语音应用 Secret Key" />
+    <div class="actions"><button class="secondary" id="clear_baidu_credentials" type="button" disabled>删除已保存的百度智能云凭据</button></div>
+    <div class="hint" id="clear_baidu_credentials_hint" hidden></div>
     <div class="hint">无需 AppID。请为应用开通短语音识别与在线合成权限并确认额度。精品、大模型音色需相应权限。</div>
     <label for="baidu_tts_voice">小A音色</label>
     <select id="baidu_tts_voice">
@@ -814,6 +816,8 @@
   </div>
 
   <div class="card">
+    <label for="voice_preview_text">试听内容</label>
+    <textarea id="voice_preview_text" rows="3" maxlength="500" placeholder="输入你想试听的文字，支持中英文混读">你好，我是小A。Hello！这个 PPT 和 Excel 我来帮你搞定。</textarea>
     <div class="actions">
       <button class="secondary" id="preview_voice" type="button">试听</button>
       <span class="msg" id="voice_preview_status"></span>
@@ -1131,6 +1135,8 @@
     let voiceCfg = null;
     let clearTencentCredentials = false;
     let tencentCredentialClearSaved = false;
+    let clearBaiduCredentials = false;
+    let baiduCredentialClearSaved = false;
     let updatePollTimer = null;
     let updatePollStartedAt = 0;
     const UPDATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -2407,6 +2413,24 @@
           : pending ? "已标记删除；点击页面底部“保存此页”后才会清除。" : "";
     }
 
+    function updateBaiduCredentialClearUI() {
+      const button = $("clear_baidu_credentials");
+      const pending = clearBaiduCredentials;
+      const environmentManaged = envManagedFields["voice.baidu_api_key"] || envManagedFields["voice.baidu_secret_key"];
+      const saved = Boolean(voiceCfg?.baidu_api_key_masked || voiceCfg?.baidu_secret_key_masked);
+      button.disabled = Boolean(environmentManaged) || (!saved && !pending);
+      button.textContent = baiduCredentialClearSaved
+        ? "重试同步删除百度智能云凭据"
+        : pending ? "取消删除百度智能云凭据" : "删除已保存的百度智能云凭据";
+      const hint = $("clear_baidu_credentials_hint");
+      hint.hidden = !pending && !environmentManaged;
+      hint.textContent = environmentManaged
+        ? "百度智能云凭据由环境变量管理，请在启动环境中移除后再操作。"
+        : baiduCredentialClearSaved
+          ? "本机凭据已删除；云端同步未完成，再次点击此按钮重试。"
+          : pending ? "已标记删除；点击页面底部“保存此页”后才会清除。" : "";
+    }
+
     function updateVoiceStatus() {
       const baidu = $("speech_provider").value === "baidu";
       $("tencent_voice_card").hidden = baidu;
@@ -2423,6 +2447,11 @@
           clearTencentCredentials = false;
           tencentCredentialClearSaved = false;
           updateTencentCredentialClearUI();
+        }
+        if (id === "baidu_api_key" || id === "baidu_secret_key") {
+          clearBaiduCredentials = false;
+          baiduCredentialClearSaved = false;
+          updateBaiduCredentialClearUI();
         }
         updateVoiceStatus();
       });
@@ -2445,6 +2474,27 @@
         $("tc_secret_key").value = "";
       }
       updateTencentCredentialClearUI();
+      updateVoiceStatus();
+    };
+
+    $("clear_baidu_credentials").onclick = async () => {
+      if (clearBaiduCredentials && baiduCredentialClearSaved) {
+        await saveCurrentPage();
+        return;
+      }
+      if (clearBaiduCredentials) {
+        clearBaiduCredentials = false;
+        $("baidu_api_key").value = voiceCfg?.baidu_api_key_masked || "";
+        $("baidu_secret_key").value = voiceCfg?.baidu_secret_key_masked || "";
+      } else {
+        if (!await settingsConfirm("确认删除已保存的百度智能云 API Key 和 Secret Key？点击“保存此页”后才会清除。", {
+          title: "删除百度智能云凭据", danger: true,
+        })) return;
+        clearBaiduCredentials = true;
+        $("baidu_api_key").value = "";
+        $("baidu_secret_key").value = "";
+      }
+      updateBaiduCredentialClearUI();
       updateVoiceStatus();
     };
 
@@ -2532,12 +2582,15 @@
       $("tc_secret_key").value = d.voice.secret_key_masked || "";
       clearTencentCredentials = false;
       tencentCredentialClearSaved = false;
+      clearBaiduCredentials = false;
+      baiduCredentialClearSaved = false;
       setManagedInput($("tc_secret_id"), "voice.secret_id");
       setManagedInput($("tc_secret_key"), "voice.secret_key");
       $("tc_region").value = d.voice.region || "";
       updateVoiceStatus();
       voiceCfg = d.voice;
       updateTencentCredentialClearUI();
+      updateBaiduCredentialClearUI();
       for (const [id, value] of [["tts_voice", d.voice.tts_voice], ["baidu_tts_voice", d.voice.baidu_tts_voice ?? 0]]) {
         if (!Array.from($(id).options).some(option => Number(option.value) === value)) {
           const option = new Option(`当前音色 ${value}`, value);
@@ -2829,6 +2882,7 @@
           baidu_tts_voice: Number($("baidu_tts_voice").value),
           baidu_tts_speed: Number($("baidu_tts_speed").value),
           clear_tencent_credentials: clearTencentCredentials,
+          clear_baidu_credentials: clearBaiduCredentials,
           tc_secret_id: $("tc_secret_id").value,
           tc_secret_key: $("tc_secret_key").value,
           tc_region: $("tc_region").value,
@@ -2855,11 +2909,12 @@
           body: JSON.stringify(body),
         });
         let d = await r.json();
-        if (d.ok && clearTencentCredentials) tencentCredentialClearSaved = true;
+        if (d.ok && currentPage === "voice" && clearTencentCredentials) tencentCredentialClearSaved = true;
+        if (d.ok && currentPage === "voice" && clearBaiduCredentials) baiduCredentialClearSaved = true;
         if (d.ok && cloudRuntimeAvailable && ["models", "voice"].includes(currentPage)) {
           const cloudResponse = await fetch(API + "/api/cloud/runtime", {
             method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({clear_tencent_credentials: clearTencentCredentials}),
+            body: JSON.stringify({clear_tencent_credentials: tencentCredentialClearSaved, clear_baidu_credentials: baiduCredentialClearSaved}),
           });
           const cloudResult = await cloudResponse.json();
           if (!cloudResponse.ok || !cloudResult.ok) {
@@ -2870,9 +2925,13 @@
             d.cloud_warning = cloudError;
           } else {
             d.cloud_synced = true;
-            if (clearTencentCredentials) {
+            if (tencentCredentialClearSaved) {
               clearTencentCredentials = false;
               tencentCredentialClearSaved = false;
+            }
+            if (baiduCredentialClearSaved) {
+              clearBaiduCredentials = false;
+              baiduCredentialClearSaved = false;
             }
           }
         }
@@ -2880,7 +2939,12 @@
           clearTencentCredentials = false;
           tencentCredentialClearSaved = false;
         }
+        if (d.ok && baiduCredentialClearSaved && !cloudRuntimeAvailable) {
+          clearBaiduCredentials = false;
+          baiduCredentialClearSaved = false;
+        }
         updateTencentCredentialClearUI();
+        updateBaiduCredentialClearUI();
         if (d.ok && d.warning) {
           msg.textContent = "其余设置已保存；" + d.warning;
           msg.className = "msg err";
@@ -2889,7 +2953,7 @@
         else if (d.ok && d.cloud_warning) {
           msg.textContent = "本机已保存；云端同步失败：" + d.cloud_warning;
           msg.className = "msg err";
-          if (!tencentCredentialClearSaved) setTimeout(load, 500);
+          if (!tencentCredentialClearSaved && !baiduCredentialClearSaved) setTimeout(load, 500);
         }
         else if (d.ok) {
           msg.textContent = d.restart_required
@@ -2899,7 +2963,11 @@
         }
         else { msg.textContent = "保存失败:" + (d.error || ""); msg.className = "msg err"; }
       } catch (e) { msg.textContent = "保存失败:" + e.message; msg.className = "msg err"; }
-      finally { button.disabled = false; }
+      finally {
+        updateTencentCredentialClearUI();
+        updateBaiduCredentialClearUI();
+        button.disabled = false;
+      }
     }
 
     $("save").onclick = () => saveCurrentPage();
@@ -3190,13 +3258,20 @@
         status.className = "msg err";
         return;
       }
+      const text = $("voice_preview_text").value.trim();
+      if (!text || Array.from(text).length > 500) {
+        status.textContent = "请输入试听内容（最多 500 个字符）";
+        status.className = "msg err";
+        $("voice_preview_text").focus();
+        return;
+      }
       if (previewAudio) previewAudio.pause();
       button.disabled = true;
       status.textContent = "正在生成试听…";
       status.className = "msg";
       try {
         const voice = $(provider === "baidu" ? "baidu_tts_voice" : "tts_voice").value;
-        const response = await fetch(`${API}/api/tts/preview?voice=${encodeURIComponent(voice)}&provider=${encodeURIComponent(provider)}&t=${Date.now()}`, {
+        const response = await fetch(`${API}/api/tts/preview?voice=${encodeURIComponent(voice)}&provider=${encodeURIComponent(provider)}&text=${encodeURIComponent(text)}&t=${Date.now()}`, {
           cache: "no-store",
         });
         if (!response.ok) {

@@ -13,6 +13,7 @@ import logging
 import ssl
 import sys
 import time
+from contextlib import aclosing
 from typing import Any, AsyncIterator, Iterable
 
 import httpx
@@ -716,13 +717,15 @@ class LLMClient:
         """
         if self.cfg.protocol == "responses":
             payload = _responses_request(messages, tools, model or self.cfg.chat_model, reasoning_effort, stream=True)
-            async for event in self._responses_stream(payload):
-                yield event
+            async with aclosing(self._responses_stream(payload)) as stream:
+                async for event in stream:
+                    yield event
             return
         if self.cfg.protocol == "anthropic":
             payload = _anthropic_request(messages, tools, model or self.cfg.chat_model, temperature, stream=True)
-            async for event in self._anthropic_stream(payload):
-                yield event
+            async with aclosing(self._anthropic_stream(payload)) as stream:
+                async for event in stream:
+                    yield event
             return
         payload: dict[str, Any] = {
             "model": model or self.cfg.chat_model, "messages": _chat_messages(messages),
@@ -1006,14 +1009,15 @@ class ProviderFailoverClient(LLMClient):
                 if not client.cfg.chat_model:
                     raise LLMError("厂商未配置首模型", kind="config")
                 complete = False
-                async for kind, data in client.chat_stream_tools(
-                        self._messages_for_provider(messages, index), model=client.cfg.chat_model, **kwargs):
-                    if kind == "delta" and data:
-                        emitted = True
-                    elif kind == "done":
-                        self._mark_reply(self._validate_reply(data), index)
-                        complete = emitted = True
-                    yield kind, data
+                async with aclosing(client.chat_stream_tools(
+                        self._messages_for_provider(messages, index), model=client.cfg.chat_model, **kwargs)) as stream:
+                    async for kind, data in stream:
+                        if kind == "delta" and data:
+                            emitted = True
+                        elif kind == "done":
+                            self._mark_reply(self._validate_reply(data), index)
+                            complete = emitted = True
+                        yield kind, data
                 if not complete:
                     raise LLMError("厂商流未完整结束")
                 return

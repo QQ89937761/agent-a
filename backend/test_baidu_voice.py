@@ -169,6 +169,32 @@ class BaiduVoiceTests(unittest.IsolatedAsyncioTestCase):
             restored = load_config(Path(tmp)/"config.toml")
             self.assertEqual((restored.voice.secret_id, restored.voice.secret_key), ("", ""))
             self.assertEqual(restored.voice.baidu_secret_key, "example-secret-key")
+            # Empty inputs retain saved credentials; deletion is explicit and transactional.
+            result = await server.api_save_settings_section("voice", server.SettingsRequest())
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(c.voice.baidu_secret_key, "example-secret-key")
+            with patch.object(server, "_rewrite_config", side_effect=OSError("disk unavailable")):
+                result = await server.api_save_settings_section("voice", server.SettingsRequest(
+                    clear_baidu_credentials=True))
+            self.assertFalse(result["ok"])
+            self.assertEqual(c.voice.baidu_secret_key, "example-secret-key")
+            c.voice.secret_id = "tc-id"; c.voice.secret_key = "tc-key"
+            result = await server.api_save_settings_section("voice", server.SettingsRequest(
+                clear_baidu_credentials=True))
+            self.assertTrue(result["ok"], result)
+            restored = load_config(Path(tmp)/"config.toml")
+            self.assertEqual((restored.voice.baidu_api_key, restored.voice.baidu_secret_key), ("", ""))
+            self.assertEqual((restored.voice.secret_id, restored.voice.secret_key), ("tc-id", "tc-key"))
+            self.assertEqual(restored.voice.baidu_tts_voice, 0)
+            self.assertFalse((await server.api_current_voice())["tts_enabled"])
+            c.voice.baidu_api_key = "managed-api"; c.voice.baidu_secret_key = "managed-secret"
+            for name in ("AGENT_BAIDU_API_KEY", "AGENT_BAIDU_SECRET_KEY"):
+                with patch.dict(os.environ, {name: "managed-value"}, clear=True):
+                    result = await server.api_save_settings_section("voice", server.SettingsRequest(
+                        clear_baidu_credentials=True))
+                self.assertFalse(result["ok"])
+                self.assertEqual((c.voice.baidu_api_key, c.voice.baidu_secret_key),
+                                 ("managed-api", "managed-secret"))
             c.voice.secret_id = "managed-example-id"; c.voice.secret_key = "managed-example-key"
             with patch.dict(os.environ, {"AGENT_TENCENT_SECRET_ID": "managed-example-id"}, clear=True):
                 result = await server.api_save_settings_section("voice", server.SettingsRequest(
@@ -176,6 +202,28 @@ class BaiduVoiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result["ok"])
             self.assertEqual((c.voice.secret_id, c.voice.secret_key),
                              ("managed-example-id", "managed-example-key"))
+
+    async def test_custom_preview_text_reaches_both_providers_and_rejects_invalid_input(self):
+        from backend.api import server
+        from fastapi import HTTPException
+        c = Config(); c.voice = cfg()
+        with patch.object(server, "CFG", c), patch.object(server, "synthesize", new=AsyncMock(return_value=MP3)) as synth:
+            for provider, voice in (("baidu", "0"), ("tencent", "601000")):
+                c.voice.provider = provider
+                c.voice.secret_id = "tc-example"; c.voice.secret_key = "tc-secret"
+                text = "  Hello & PPT + Excel?\n\u4f60\u597d <test> #50%  "
+                result = await server.api_tts_preview(voice, provider, text)
+                self.assertEqual(result.body, MP3)
+                synth.assert_awaited_with(c.voice, text.strip(), voice=int(voice))
+                self.assertEqual(result.headers["cache-control"], "no-store")
+                for invalid in ("", " \n ", "a" * 501):
+                    synth.reset_mock()
+                    with self.assertRaises(HTTPException) as cm:
+                        await server.api_tts_preview(voice, provider, invalid)
+                    self.assertEqual(cm.exception.status_code, 422)
+                    synth.assert_not_awaited()
+                await server.api_tts_preview(voice, provider, "a" * 500)
+                synth.assert_awaited_once_with(c.voice, "a" * 500, voice=int(voice))
 
     async def test_preview_zero_provider_mismatch_and_save_rollback(self):
         from backend.api import server

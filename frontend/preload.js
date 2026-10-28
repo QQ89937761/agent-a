@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld("bridge", {
   openPage: (urlPath) => ipcRenderer.send("open-page", urlPath),
   openImage: (b64) => ipcRenderer.send("open-image", b64),
   revealPath: (filePath) => ipcRenderer.send("reveal-path", filePath),
+  openLocalFile: (filePath) => ipcRenderer.invoke("open-local-file", filePath),
   // 取本机 UI 令牌:file:// 的悬浮球连 WebSocket 时要带上,证明自己是本机 Electron 而非恶意网页。
   getUiToken: () => ipcRenderer.invoke("get-ui-token"),
   onBackendReady: (callback) => {

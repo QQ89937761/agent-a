@@ -212,6 +212,22 @@ if (!html.includes('img.src = "data:image/jpeg;base64," + b64;') ||
     assert.equal(r.continuousStopped(), 0);
     assert.equal(r.speechCancelled(), 0);
   }
+  {
+    const r = runtime(), c = r.context;
+    r.value("continuousActive = false;");
+    c.handleEvent({type: "interjected", data: {client_id: "request-1"}});
+    assert.equal(c.pendingDeliveries.size, 0, "insertion acknowledges delivery without ending the task");
+    assert.match(c.statusEl.textContent, /已插入新要求/);
+    c.handleEvent({type: "interjection_applied", data: {}});
+    assert.equal(r.value("taskBusy"), true);
+    assert.equal(c.statusEl.textContent, "正在按插话调整任务");
+    assert(r.events.some(item => item[1].includes("保留已完成进度")));
+    c.handleEvent({type: "tool_result", data: {name: "write_two", ok: true, skipped: true}});
+    c.handleEvent({type: "tool_result", data: {name: "write_two", ok: false, interrupted: true}});
+    assert.equal(r.events.filter(item => item[1].includes("尚未开始")).length, 2);
+    assert(r.events.every(item => item[0] === ""), "a skipped operation is not a tool failure");
+    assert.equal(r.value("serviceFailed"), false);
+  }
   console.log("terminal/config/service errors restore send state; recoverable errors keep running");
 }
 const screenshotMainSource = fs.readFileSync("main.js", "utf8");
@@ -243,8 +259,9 @@ if (!html.includes('case "settings_changed":') ||
   throw new Error("live settings refresh or its in-flight request guard missing");
 }
 if (!html.includes('case "interjected":') ||
-    !html.includes("已收到你的插话；当前") ||
-    !html.includes("完成或超时返回后会处理") ||
+    !html.includes("已收到你的插话，正在切换到新要求") ||
+    !html.includes('case "interjection_applied":') ||
+    !html.includes("if (d.skipped || d.interrupted)") ||
     !html.includes('document.querySelectorAll(".confirm-box").forEach(box => box.remove())') ||
     !html.includes("function stopCurrentTask()") ||
     !html.includes("taskBusy && !hasActionInput()") ||
@@ -882,7 +899,7 @@ if (toggleCount !== 1) {
     querySelector(selector) { return this.controls[selector] ||= {}; },
     remove() {},
   });
-  const run = new Function("document", "ws", "window", "log", "escapeHtml", "formatConfirmArguments", `
+  const run = new Function("document", "ws", "window", "log", "escapeHtml", "formatConfirmArguments", "scrollIfNear", `
     let currentConversationId = "origin";
     ${showConfirm}
     showConfirm({name: "dangerous_write", arguments: {}, approval_scope: ["task"]});
@@ -890,7 +907,7 @@ if (toggleCount !== 1) {
     currentConversationId = "another-tab";
   `);
   run({createElement: makeBox}, {send: payload => sent.push(JSON.parse(payload))}, {},
-      {appendChild: box => boxes.push(box)}, value => value, JSON.stringify);
+      {appendChild: box => boxes.push(box)}, value => value, JSON.stringify, () => {});
   assert.match(boxes[0].innerHTML, /允许本次任务/);
   assert.match(boxes[0].innerHTML, /拒绝本次任务/);
   boxes[0].querySelector(".btn-allow").onclick();
@@ -1114,7 +1131,7 @@ if (toggleCount !== 1) {
     addEventListener: (name, callback) => { listeners[name] = callback; }};
   const context = vm.createContext({IS_LOCAL_FILE: false, window: {visualViewport},
     document: {documentElement: {style: {setProperty: (key, value) => { properties[key] = value; }}}},
-    isLogNearBottom: () => nearBottom, closeComposerMenus: () => {},
+    isLogNearBottom: () => nearBottom, messageNavigator: {isBrowsing: () => false}, closeComposerMenus: () => {},
     scrollToBottom: () => { scrolls++; }});
   vm.runInContext(html.slice(start, end), context);
   assert.equal(properties['--app-height'], '720px');
@@ -1207,7 +1224,7 @@ assert.match(settingsHtml, /id="tc_secret_key" type="password" autocomplete="off
 assert.match(settingsHtml, /id="baidu_api_key" type="password" autocomplete="off"/);
 assert.match(settingsHtml, /id="baidu_secret_key" type="password" autocomplete="off"/);
 assert.match(settingsHtml, /clear_tencent_credentials: clearTencentCredentials/);
-assert.match(settingsHtml, /body: JSON\.stringify\(\{clear_tencent_credentials: clearTencentCredentials\}\)/);
+assert.match(settingsHtml, /body: JSON\.stringify\(\{clear_tencent_credentials: tencentCredentialClearSaved, clear_baidu_credentials: baiduCredentialClearSaved\}\)/);
 assert.match(settingsHtml, /tencentCredentialClearSaved/);
 // Use the actual provider/status function with independent credential fields.
 {
@@ -1229,3 +1246,131 @@ assert.match(settingsHtml, /tencentCredentialClearSaved/);
   assert.equal(fields.tc_secret_key.value, "tc-key");
   console.log("speech provider: independent credentials, visible form and status passed");
 }
+// Exercise the actual credential buttons and save flow for both providers.
+(async () => {
+  const vm = require('node:vm');
+  function setup(provider) {
+    const fields = new Proxy({}, {get: (target, id) => target[id] ||= {
+      value: '', hidden: false, disabled: false, textContent: '', listeners: {},
+      addEventListener(type, handler) { this.listeners[type] = handler; },
+    }});
+    const calls = [], responses = [], timers = [];
+    const context = vm.createContext({
+      $: id => fields[id], envManagedFields: {}, currentPage: 'voice',
+      cloudRuntimeAvailable: true, API: '', confirmed: true,
+      settingsConfirm: async () => context.confirmed, collectProviders: () => [],
+      load: () => {}, setTimeout: fn => timers.push(fn),
+      fetch: async (url, options) => {
+        calls.push({url, body: JSON.parse(options.body)});
+        const response = responses.shift();
+        if (!response) throw new Error('missing mock response');
+        if (response instanceof Error) throw response;
+        return {ok: true, json: async () => response};
+      },
+    });
+    const start = settingsHtml.indexOf('    let voiceCfg = null;');
+    const end = settingsHtml.indexOf('    let updatePollTimer', start);
+    const uiStart = settingsHtml.indexOf('    function updateTencentCredentialClearUI()');
+    const uiEnd = settingsHtml.indexOf('    function setServiceAvailable', uiStart);
+    const saveStart = settingsHtml.indexOf('    async function saveCurrentPage(');
+    const saveEnd = settingsHtml.indexOf('    $("save").onclick', saveStart);
+    vm.runInContext(settingsHtml.slice(start, end) + settingsHtml.slice(uiStart, uiEnd) + settingsHtml.slice(saveStart, saveEnd), context);
+    const run = code => vm.runInContext(code, context);
+    run('voiceCfg = {secret_id_masked:"tc-mask", secret_key_masked:"tc-key-mask", baidu_api_key_masked:"bd-mask", baidu_secret_key_masked:"bd-key-mask"};');
+    fields.speech_provider.value = provider;
+    for (const [id, value] of Object.entries({tc_secret_id:'tc-mask', tc_secret_key:'tc-key-mask', baidu_api_key:'bd-mask', baidu_secret_key:'bd-key-mask'})) fields[id].value = value;
+    const prefix = provider === 'baidu' ? 'Baidu' : 'Tencent';
+    const saved = provider === 'baidu' ? 'baiduCredentialClearSaved' : 'tencentCredentialClearSaved';
+    const first = provider === 'baidu' ? 'baidu_api_key' : 'tc_secret_id';
+    const second = provider === 'baidu' ? 'baidu_secret_key' : 'tc_secret_key';
+    const flag = `clear_${provider}_credentials`;
+    const update = () => run(`update${prefix}CredentialClearUI()`);
+    const pending = () => run(`clear${prefix}Credentials`);
+    update();
+    return {context, fields, calls, responses, timers, run, first, second, flag, saved, update, pending, click: () => fields[flag].onclick()};
+  }
+  for (const provider of ['tencent', 'baidu']) {
+    const h = setup(provider), {context, fields, first, second, flag} = h;
+    assert.equal(fields[flag].disabled, false);
+    context.confirmed = false; await h.click();
+    assert.equal(h.pending(), false); assert(fields[first].value);
+    context.confirmed = true; await h.click();
+    assert.equal(h.pending(), true);
+    assert.equal(fields[first].value, ''); assert.equal(fields[second].value, '');
+    assert.equal(fields[flag + '_hint'].hidden, false);
+    assert.equal(h.calls.length, 0, 'marking deletion cannot write before saving');
+    await h.click();
+    assert.equal(h.pending(), false); assert(fields[first].value); assert(fields[second].value);
+    await h.click(); fields[first].value = 'replacement'; fields[first].listeners.input();
+    assert.equal(h.pending(), false, 'replacement cancels deletion');
+    await h.click();
+    h.responses.push({ok: false, error: 'disk failure'}); await h.run('saveCurrentPage()');
+    assert.equal(h.pending(), true); assert.equal(h.run(h.saved), false);
+    assert.equal(h.calls.length, 1, 'failed local save cannot clear cloud credentials');
+    h.responses.push({ok: true}, {ok: false, error: 'sync unavailable'}); await h.run('saveCurrentPage()');
+    assert.equal(h.calls.at(-2).body[flag], true); assert.equal(h.calls.at(-1).body[flag], true);
+    assert.equal(h.run(h.saved), true); assert.equal(h.timers.length, 0);
+    assert(fields[flag].textContent.startsWith('\u91cd\u8bd5'));
+    h.responses.push({ok: true}, new Error('network failure')); await h.click();
+    assert.equal(h.run(h.saved), true);
+    h.responses.push({ok: true}, {ok: true}); await h.click();
+    assert.equal(h.pending(), false); assert.equal(h.run(h.saved), false);
+    const local = setup(provider); local.context.cloudRuntimeAvailable = false;
+    await local.click(); local.responses.push({ok: true}); await local.run('saveCurrentPage()');
+    assert.equal(local.pending(), false); assert.equal(local.calls.length, 1);
+    const managed = setup(provider);
+    managed.context.envManagedFields[provider === 'baidu' ? 'voice.baidu_secret_key' : 'voice.secret_key'] = true;
+    managed.update(); assert.equal(managed.fields[flag].disabled, true);
+    managed.run('voiceCfg = {}'); managed.context.envManagedFields = {};
+    managed.update(); assert.equal(managed.fields[flag].disabled, true);
+    const models = setup(provider); await models.click(); models.context.currentPage = 'models';
+    models.responses.push({ok: true}, {ok: true}); await models.run('saveCurrentPage()');
+    assert.equal(models.calls.at(-1).body[flag], false, 'models save cannot sync unsaved voice deletion');
+  }
+  const both = setup('baidu');
+  await both.fields.clear_tencent_credentials.onclick(); await both.click();
+  both.responses.push({ok: true}, {ok: true}); await both.run('saveCurrentPage()');
+  assert.equal(both.calls.at(-1).body.clear_tencent_credentials, true);
+  assert.equal(both.calls.at(-1).body.clear_baidu_credentials, true);
+  console.log('speech credential deletion: confirmation, cancellation, isolation, persistence, cloud retry and environment guards passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+// The preview sends user text verbatim (URL-encoded), using the selected provider/voice.
+(async () => {
+  const vm = require('node:vm');
+  const fields = new Proxy({}, {get: (target, id) => target[id] ||= {value: '', focus() { this.focused = true; }}});
+  const calls = []; let playbackCount = 0;
+  const context = vm.createContext({$: id => fields[id], API: '', voiceCfg: {provider: 'baidu', tts_enabled: true},
+    previewAudio: null, URL: {createObjectURL: () => 'blob:preview'},
+    Audio: function () { this.play = async () => { playbackCount++; }; this.pause = () => {}; },
+    fetch: async url => { calls.push(url); return {ok: true, blob: async () => ({type: 'audio/mpeg'})}; },
+  });
+  const start = settingsHtml.indexOf('    $("preview_voice").onclick');
+  const end = settingsHtml.indexOf('    $("backup_now").onclick', start);
+  vm.runInContext(settingsHtml.slice(start, end), context);
+  for (const [provider, voice] of [['baidu', '0'], ['tencent', '601000']]) {
+    context.voiceCfg.provider = provider;
+    fields.speech_provider.value = provider;
+    fields[provider === 'baidu' ? 'baidu_tts_voice' : 'tts_voice'].value = voice;
+    const text = 'Hello & PPT + Excel?\n\u4f60\u597d <test> #50%';
+    fields.voice_preview_text.value = '  ' + text + '  ';
+    await fields.preview_voice.onclick();
+    const params = new URL(calls.at(-1), 'https://example.test').searchParams;
+    assert.equal(params.get('text'), text);
+    assert.equal(params.get('provider'), provider); assert.equal(params.get('voice'), voice);
+    assert.equal(fields.preview_voice.disabled, false);
+  }
+  assert.equal(playbackCount, 2);
+  for (const text of ['', ' \n ', 'a'.repeat(501)]) {
+    fields.voice_preview_text.value = text;
+    await fields.preview_voice.onclick();
+    assert.equal(calls.length, 2, 'empty/oversized text cannot call synthesis');
+    assert.equal(fields.voice_preview_text.focused, true);
+  }
+  fields.voice_preview_text.value = 'a'.repeat(500);
+  await fields.preview_voice.onclick(); assert.equal(calls.length, 3);
+  fields.voice_preview_text.value = 'user entered text';
+  context.voiceCfg.provider = 'baidu';
+  await fields.preview_voice.onclick(); assert.equal(calls.length, 3, 'unsaved provider switch still blocks preview');
+  assert.equal(fields.voice_preview_text.value, 'user entered text');
+  console.log('custom voice preview: selected provider, exact user text, encoding, input limits and playback passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

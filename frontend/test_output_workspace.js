@@ -35,3 +35,79 @@ assert(writes[0].file.endsWith(".png"));
 assert(writes[1].file.endsWith(".jpg"));
 assert.notEqual(writes[0].file, writes[1].file);
 console.log("image preview workspace and validation passed");
+
+
+// Exercise the real file-opening IPC and renderer, without opening user files.
+async function testLocalFileLinks() {
+  const handlers = new Map();
+  const sender = {};
+  const chatWin = { webContents: sender, isDestroyed: () => false };
+  const file = "D:\\XiaoA\\成果文件 (final).docx";
+  const calls = [];
+  let statError = null;
+  let fileExists = true;
+  let openError = "";
+  const start = source.indexOf('ipcMain.handle("open-local-file",');
+  const stop = source.indexOf('\n});', start) + 4;
+  vm.runInNewContext(source.slice(start, stop), {
+    ipcMain: {handle(name, fn) {handlers.set(name, fn);}}, chatWin, path, Set,
+    fs: {promises: {async stat(p) {
+      calls.push(["stat", p]);
+      if (statError) throw statError;
+      return {isFile: () => fileExists};
+    }}},
+    shell: {async openPath(p) {calls.push(["open", p]); return openError;}},
+  });
+  const open = handlers.get("open-local-file");
+  assert(open, "file-opening handler is installed");
+  assert.equal((await open({sender}, file)).ok, true);
+  assert.equal(calls.at(-1)[0], "open");
+  assert.equal(calls.at(-1)[1], path.win32.normalize(file));
+  const count = calls.length;
+  for (const candidate of ["file:///D:/a.docx", "https://example.test/a.docx", "relative.docx", "\\\\server\\share\\a.docx", "D:\\a.exe", "D:\\a.cmd", "D:\\a.ps1", "D:\\a.lnk", "D:\\a.docx:payload", "D:\\a.docx\u0000", null]) {
+    assert.equal((await open({sender}, candidate)).ok, false, String(candidate));
+  }
+  assert.equal((await open({sender: {}}, file)).ok, false);
+  assert.equal(calls.length, count, "invalid paths and untrusted senders never reach disk or shell");
+  fileExists = false;
+  assert.equal((await open({sender}, file)).error, "此路径不是文件。");
+  fileExists = true;
+  statError = {code: "ENOENT"};
+  assert.equal((await open({sender}, file)).error, "文件不存在，可能已移动或删除。");
+  statError = null;
+  openError = "No association";
+  assert.match((await open({sender}, file)).error, /已安装/);
+
+  const html = fs.readFileSync(path.join(__dirname, "src/index.html"), "utf8");
+  const clicks = new Map();
+  const context = vm.createContext({
+    window: {bridge: {openLocalFile: async () => ({ok: true})}, XiaoALanguage: {translate: text => text}},
+    log: {addEventListener(name, fn) {clicks.set(name, fn);}},
+    document: {createElement() {return {setAttribute() {}};}},
+  });
+  const a = html.indexOf('    function _escapeHtmlText(');
+  const b = html.indexOf('    async function copyText(', a);
+  vm.runInContext(html.slice(a, b) + '\nglobalThis.test = {renderMarkdown};', context);
+  const render = context.test.renderMarkdown;
+  assert.match(render('`' + file + '`'), /class="local-file-link"/);
+  assert.match(render(file), /class="local-file-link"/);
+  assert.match(render("`D:\\客户 & O'Brien\\交付.docx`"), /&amp; O&#39;Brien/);
+  assert.doesNotMatch(render('```\n' + file + '\n```'), /local-file-link/);
+  for (const text of ['`D:\\run.exe`', '`D:\\run.docx:payload`', '`https://example.test/a.docx`', '`D:\\<img src=x onerror=alert(1)>.docx`']) {
+    assert.doesNotMatch(render(text), /class="local-file-link"/);
+    assert.doesNotMatch(render(text), /<img/);
+  }
+  context.window.bridge = null;
+  assert.doesNotMatch(render('`' + file + '`'), /local-file-link/, "browser-only clients cannot open desktop paths");
+  context.window.bridge = {openLocalFile: async () => ({ok: false, error: "文件不存在，可能已移动或删除。"})};
+  const attrs = new Map();
+  let failure;
+  const link = {dataset: {localPath: file}, getAttribute: name => attrs.get(name), setAttribute: (name, val) => attrs.set(name, val), removeAttribute: name => attrs.delete(name), after: value => {failure = value;}};
+  let prevented = false;
+  await clicks.get("click")({target: {closest: () => link}, preventDefault() {prevented = true;}});
+  assert.equal(prevented, true);
+  assert.equal(failure.textContent, "文件不存在，可能已移动或删除。");
+  assert.equal(attrs.has("aria-busy"), false);
+  console.log("local file links, safe document IPC, and failure feedback passed");
+}
+testLocalFileLinks().catch(error => { console.error(error); process.exitCode = 1; });

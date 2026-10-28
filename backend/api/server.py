@@ -3156,6 +3156,7 @@ class SettingsRequest(BaseModel):
     baidu_tts_voice: int | None = None
     baidu_tts_speed: int | None = None
     clear_tencent_credentials: bool = False
+    clear_baidu_credentials: bool = False
     tc_secret_id: str = ""
     tc_secret_key: str = ""
     tc_region: str = ""
@@ -3191,7 +3192,7 @@ _SETTING_SECTION_FIELDS = {
         "memory_backup_dir", "memory_backup_interval_minutes", "memory_backup_keep_count",
     },
     "voice": {
-        "clear_tencent_credentials", "tc_secret_id", "tc_secret_key", "tc_region", "tts_voice",
+        "clear_baidu_credentials", "clear_tencent_credentials", "tc_secret_id", "tc_secret_key", "tc_region", "tts_voice",
         "speech_provider", "baidu_api_key", "baidu_secret_key", "baidu_tts_voice", "baidu_tts_speed",
     },
     "connections": {
@@ -3204,6 +3205,7 @@ _SETTING_SECTION_FIELDS = {
 
 class CloudRuntimeSyncRequest(BaseModel):
     clear_tencent_credentials: bool = False
+    clear_baidu_credentials: bool = False
 
 
 class ExtensionInstallRequest(BaseModel):
@@ -4592,6 +4594,8 @@ async def api_cloud_runtime(request: Request, req: CloudRuntimeSyncRequest = Clo
     }
     if req.clear_tencent_credentials:
         values["AGENT_CLEAR_TENCENT_CREDENTIALS"] = "1"
+    if req.clear_baidu_credentials:
+        values["AGENT_CLEAR_BAIDU_CREDENTIALS"] = "1"
     try:
         from backend.core import cloud_deploy as cloud_deployer
         await asyncio.to_thread(cloud_deployer.sync_runtime_settings, app_home(), values)
@@ -4708,6 +4712,8 @@ async def api_save_settings(req: SettingsRequest) -> dict:
                 raise ValueError("音色编号或语速不正确")
         if req.clear_tencent_credentials and any(os.getenv(name) for name in ("AGENT_TENCENT_SECRET_ID", "AGENT_TENCENT_SECRET_KEY")):
             raise ValueError("腾讯云凭据由环境变量管理，请在启动环境中移除对应变量后再清除")
+        if req.clear_baidu_credentials and any(os.getenv(name) for name in ("AGENT_BAIDU_API_KEY", "AGENT_BAIDU_SECRET_KEY")):
+            raise ValueError("百度智能云凭据由环境变量管理，请在启动环境中移除对应变量后再清除")
         if any(char in req.baidu_api_key + req.baidu_secret_key for char in "\r\n\0"):
             raise ValueError("百度语音密钥包含非法字符")
         if any(char in req.web_password for char in "\r\n\0"):
@@ -4823,7 +4829,9 @@ async def api_save_settings(req: SettingsRequest) -> dict:
             CFG.voice.provider = req.speech_provider
         for attr in ("baidu_api_key", "baidu_secret_key"):
             value = getattr(req, attr).strip()
-            if _changed(value, getattr(CFG.voice, attr)):
+            if req.clear_baidu_credentials:
+                setattr(CFG.voice, attr, "")
+            elif _changed(value, getattr(CFG.voice, attr)):
                 setattr(CFG.voice, attr, value)
         for attr in ("baidu_tts_voice", "baidu_tts_speed"):
             if getattr(req, attr) is not None:
@@ -5152,12 +5160,16 @@ async def api_tts(req: TTSRequest) -> dict:
 
 
 @app.get("/api/tts/preview")
-async def api_tts_preview(voice: str = "", provider: str = ""):
+async def api_tts_preview(voice: str = "", provider: str = "",
+                          text: str = "你好，我是小A。Hello！这个 PPT 和 Excel 我来帮你搞定。"):
     """Return preview audio as a real media response so browsers may play it from one click."""
     from fastapi.responses import Response
 
     if not CFG.voice.tts_enabled:
         raise HTTPException(status_code=400, detail="未配置云语音")
+    text = text.strip()
+    if not text or len(text) > 500:
+        raise HTTPException(status_code=422, detail="请输入试听内容（最多 500 个字符）")
     try:
         try:
             voice_value = int(voice)
@@ -5168,7 +5180,7 @@ async def api_tts_preview(voice: str = "", provider: str = ""):
         if not (0 if CFG.voice.effective_provider == "baidu" else 1) <= voice_value <= 999999:
             raise HTTPException(status_code=422, detail="\u97f3\u8272\u7f16\u53f7\u4e0d\u6b63\u786e")
         audio = await synthesize(
-            CFG.voice, "你好，我是小A。Hello！这个 PPT 和 Excel 我来帮你搞定。", voice=voice_value,
+            CFG.voice, text, voice=voice_value,
         )
         return Response(
             content=audio,
@@ -5409,6 +5421,10 @@ async def ui_language_script():
 async def markdown_table_script():
     return FileResponse(str(_frontend_file("markdown-table.js")), media_type="text/javascript")
 
+
+@app.get("/chat-navigator.js")
+async def chat_navigator_script():
+    return FileResponse(str(_frontend_file("chat-navigator.js")), media_type="text/javascript")
 
 # 活跃的前端连接,用于服务端主动推送(新消息通知等)
 ACTIVE_WS: set[WebSocket] = set()

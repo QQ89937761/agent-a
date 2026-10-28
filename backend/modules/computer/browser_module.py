@@ -102,10 +102,14 @@ class BrowserController:
         self._launch_lock = asyncio.Lock()
         self._process: subprocess.Popen | None = None
 
-    async def _http(self, method: str, path: str, timeout: float = 5.0) -> Any:
+    async def _http(
+        self, method: str, path: str, timeout: float = 5.0, *, expect_json: bool = True,
+    ) -> Any:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.request(method, self.endpoint + path)
             response.raise_for_status()
+            if not expect_json:
+                return response.text
             return response.json() if response.content else {}
 
     async def _available(self) -> bool:
@@ -287,16 +291,19 @@ class BrowserController:
         """在同一个 CDP 会话中完成一次请求。"""
         await socket.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
         deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"浏览器操作超时：{method}")
-            payload = json.loads(await asyncio.wait_for(socket.recv(), remaining))
-            if payload.get("id") != request_id:
-                continue
-            if payload.get("error"):
-                raise RuntimeError(str(payload["error"].get("message") or payload["error"]))
-            return payload.get("result") or {}
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                payload = json.loads(await asyncio.wait_for(socket.recv(), remaining))
+                if payload.get("id") != request_id:
+                    continue
+                if payload.get("error"):
+                    raise RuntimeError(str(payload["error"].get("message") or payload["error"]))
+                return payload.get("result") or {}
+        except TimeoutError as exc:
+            raise TimeoutError(f"浏览器操作超时：{method}（{timeout:g} 秒）") from exc
 
     async def _evaluate(self, target: dict[str, Any], expression: str) -> Any:
         result = await self._cdp(target, "Runtime.evaluate", {
@@ -540,7 +547,17 @@ class BrowserController:
 
     async def screenshot(self) -> dict[str, Any]:
         target = await self._target()
-        result = await self._cdp(target, "Page.captureScreenshot", {"format": "png", "fromSurface": True})
+        try:
+            result = await self._cdp(target, "Page.captureScreenshot", {"format": "png", "fromSurface": True})
+        except TimeoutError:
+            # A stalled surface capture may still allow the viewport capture path.
+            try:
+                result = await self._cdp(target, "Page.captureScreenshot", {"format": "png", "fromSurface": False})
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    "浏览器截图超时（已自动重试）；页面可能正在渲染或浏览器无响应。"
+                    "可稍后重试，或使用 browser_snapshot 读取网页结构。"
+                ) from exc
         image = str(result.get("data") or "")
         if not image:
             raise RuntimeError("浏览器没有返回截图")
@@ -560,11 +577,11 @@ class BrowserController:
         if not target_id:
             raise ValueError("激活或关闭标签页需要 target_id")
         if action == "activate":
-            await self._http("GET", "/json/activate/" + quote(target_id, safe=""))
+            await self._http("GET", "/json/activate/" + quote(target_id, safe=""), expect_json=False)
             self._active_target = target_id
             return {"ok": True, "active_target": target_id}
         if action == "close":
-            await self._http("GET", "/json/close/" + quote(target_id, safe=""))
+            await self._http("GET", "/json/close/" + quote(target_id, safe=""), expect_json=False)
             if self._active_target == target_id:
                 self._active_target = ""
             self._refs.clear()

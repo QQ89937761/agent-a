@@ -364,3 +364,46 @@ console.log("Cloud deployment and release-note English: screenshots, timestamped
 
 assert.equal(translate("合成:百度智能云 已填写（保存后生效） 识别:百度智能云 已填写（保存后生效）", "en"),
   "Speech: Baidu AI Cloud Entered (save to apply) · Recognition: Baidu AI Cloud Entered (save to apply)");
+
+// Deletion labels, confirmations and environment errors round-trip in both languages.
+for (const [source, english] of [
+  [
+    "删除已保存的百度智能云凭据",
+    "Delete saved Baidu AI Cloud credentials"
+  ],
+  [
+    "取消删除百度智能云凭据",
+    "Cancel Baidu AI Cloud credential deletion"
+  ],
+  [
+    "重试同步删除百度智能云凭据",
+    "Retry Baidu AI Cloud credential deletion sync"
+  ],
+  [
+    "确认删除已保存的百度智能云 API Key 和 Secret Key？点击“保存此页”后才会清除。",
+    "Delete the saved Baidu AI Cloud API Key and Secret Key? They will be removed when you click “Save this page”."
+  ],
+  [
+    "百度智能云凭据由环境变量管理，请在启动环境中移除后再操作。",
+    "Baidu AI Cloud credentials are managed by environment variables. Remove them from the launch environment first."
+  ],
+  [
+    "删除百度智能云凭据",
+    "Delete Baidu AI Cloud credentials"
+  ],
+  [
+    "百度智能云凭据由环境变量管理，请在启动环境中移除对应变量后再清除",
+    "Baidu AI Cloud credentials are managed by environment variables. Remove the variables from the launch environment first."
+  ]
+]) {
+  assert.equal(translate(source, "en"), english);
+  assert.equal(translate(source, "zh"), source);
+}
+
+for (const [source, english] of [["试听内容", "Preview text"], ["输入你想试听的文字，支持中英文混读", "Enter text to preview, including mixed Chinese and English"], ["请输入试听内容（最多 500 个字符）", "Enter preview text (up to 500 characters)"]]) {
+  assert.equal(translate(source, "en"), english);
+  assert.equal(translate(source, "zh"), source);
+}
+
+assert.equal(translate("\u6d88\u606f\u5b9a\u4f4d", "en"), "Message navigation");
+assert.equal(translate("\u9644\u4ef6\u6d88\u606f", "en"), "Attachment message");

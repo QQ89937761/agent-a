@@ -16,6 +16,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -897,7 +898,7 @@ SYSTEM_PROMPT = """你是“小A”，一个运行在用户电脑上的 AI 办�
 - 用户上传的图片已经通过 image_url 进入视觉上下文，优先直接分析附件；分析附件不需要 screen_capture，也不需要遍历电脑寻找同名文件。上一条上传、这一条追问时，先使用历史附件。图片未成功载入时说明缺失，请用户补充，不能拿桌面截图代替原图。
 - 有明确视觉任务时可主动查看界面，按需要截图或区域截图，例如图纸操作、定位界面、故障排查和结果验收。避免无目的连续截图，不要求用户必须说出“截图”两个字。
 - 启动软件优先 launch_app，切换已打开的窗口优先 focus_window；已成功启动后不用重复启动。网页任务（包括普通打开网页）默认使用小A独立浏览器 browser_open，配合 browser_snapshot 和 browser_click/browser_type/browser_select 通过网页结构后台操作，不抢鼠标键盘；browser_wait 检查加载或提交结果。仅用户明确要求使用系统默认浏览器或已有个人浏览器窗口时才用 open_url；独立浏览器有自己的登录状态，不得把默认浏览器误称为小A专用浏览器。
-- browser_tabs 可按 target_id 切换或关闭标签页。小A专用浏览器使用独立资料目录，首次使用网站可能需要用户登录，注意不要混淆普通浏览器与专用浏览器。
+- browser_tabs 可按 target_id 切换或关闭标签页。小A专用浏览器使用独立资料目录，首次使用网站可能需要用户登录，注意不要混淆普通浏览器与专用浏览器。任务完成且页面不再需要、用户未要求保留时，用 browser_tabs 按 target_id 关闭本任务打开的标签页；不要关闭其他任务或用户原有的标签页。用户已关闭页面时核对标签页列表，不要重复截图或反复关闭。
 - 任务完成后，只有确认窗口是本任务新打开、产物已保存核验且用户没有要求继续使用时，才用 close_window 按精确标题礼貌关闭（force=false）。不关闭用户原有窗口，不按进程名批量关闭；窗口归属、保存状态或后续用途不明确时保留并说明，遇到保存弹窗不绕过、不强杀。
 - 截图的模型观察图可能缩小；按图定位时，给 click_coordinate/move_pointer/scroll_screen/drag_pointer 传该截图 path 作为 screenshot_path，坐标直接使用观察图像素，工具会换算桌面缩放与裁剪偏移。只在使用 list_windows 的桌面原始坐标时省略 screenshot_path。
 - 输入文档文字时给 type_text 传目标窗口 handle；授权弹窗或用户插话可能切走焦点，先恢复目标再输入，不能改用命令行剪贴板绕过输入或发送保护。文档标题含“小A”不代表聊天窗口。
@@ -1188,9 +1189,51 @@ class Agent:
                 )
                 messages.append({
                     "role": "user",
-                    "content": f"[用户中途插话]\n{item}",
+                    "content": f"[用户中途插话]\n{item}\n请在保留已完成进度的基础上优先处理这条补充；与原要求冲突时以本条为准。",
                 })
             return bool(items)
+
+        async def model_events(stream):
+            # Only model generation is interruptible; tools must return their real outcome.
+            pending = None
+            interrupt = None
+            async with aclosing(stream):
+                try:
+                    while interrupt is None:
+                        pending = asyncio.create_task(anext(stream))
+                        while True:
+                            done, _ = await asyncio.wait({pending}, timeout=0.1)
+                            if done:
+                                try:
+                                    event = pending.result()
+                                except StopAsyncIteration:
+                                    return
+                                # Keep completed native responses (including reasoning metadata).
+                                if event[0] == "done":
+                                    interrupt = event
+                                    break
+                                break
+                            if self.abort_fn is not None and self.abort_fn():
+                                interrupt = ("aborted", None)
+                                break
+                            inserted = take_interjections()
+                            if inserted:
+                                interrupt = ("interjection", inserted)
+                                break
+                        if interrupt is None:
+                            inserted = take_interjections()
+                            if inserted:
+                                interrupt = ("interjection", inserted)
+                            else:
+                                yield event
+                finally:
+                    if pending is not None:
+                        if not pending.done():
+                            pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+            # Close the request before applying its response or starting a replacement.
+            if interrupt is not None:
+                yield interrupt
 
         max_steps = max(1, int(self.cfg.max_steps))
         # 绝对安全上限:有进展就自动续跑,只有真失控(累计远超常规任务)才硬停。
@@ -1204,11 +1247,10 @@ class Agent:
                 yield self._abort_event(messages)
                 yield AgentEvent("done", {"aborted": True})
                 return
-            append_interjections()
+            if append_interjections():
+                yield AgentEvent("interjection_applied", {})
             step += 1
-            if _is_spinning(recent_calls, window=6):
-                stop_reason = "spinning"
-                break
+            stop_reason = "spinning" if _is_spinning(recent_calls, window=6) else ""
             if _is_spinning(recent_calls):
                 if not loop_warned:
                     messages.append({"role": "system", "content":
@@ -1222,7 +1264,6 @@ class Agent:
                 if step >= hard_limit:
                     # 撞绝对安全上限:自动续跑都续不动了,是真失控,停
                     stop_reason = "step_limit"
-                    break
                 # 有进展(不是 spinning,上面已判过)就自动续一段,继续干。
                 # 这里不产生 truncated、不写断点、不提"继续"。
                 next_limit = step + max_steps
@@ -1248,33 +1289,136 @@ class Agent:
                 if not fitted:
                     # 压缩后仍超线：保留上下文，供更大窗口模型继续。
                     stop_reason = "context_exhausted"
-                    break
                 self._active_messages = messages
+            if stop_reason:
+                # 触发保护:让模型基于完整工作上下文,总结"已做了什么、还差什么"。
+                # 把这段总结作为回复存进历史,这样用户说"继续"时,下一轮能凭它接着做,
+                # 而不是像以前那样只剩零散文字、模型不知道进行到哪。
+                summary = ""
+                if stop_reason == "context_exhausted":
+                    # 当前模型容纳不下时跳过总结；保留进度供切换更大窗口模型后继续。
+                    # 43.7:超线主因是图片还是文字,措辞要指对方向。
+                    full = _context_exhausted_message(messages)
+                else:
+                    interrupted = False
+                    try:
+                        reason_text = {
+                            "context_limit": "上下文已接近当前模型的窗口上限",
+                            "spinning": "调整策略后仍检测到操作循环持续产生相同结果",
+                            "step_limit": "任务达到了防止无限执行的绝对安全上限",
+                        }[stop_reason]
+                        tail_guide = {
+                            "context_limit": "这样我说\"继续\"时你能接着干。",
+                            "spinning": "这样我说\"继续\"时你能接着干。",
+                            "step_limit": "请说清任务规模已经超了、建议怎么拆成几个更小的任务。",
+                        }[stop_reason]
+                        ask = messages + [{
+                            "role": "user",
+                            "content": f"任务还没做完，{reason_text}。请遵循用户要求及回复语言偏好，简要总结:①已经完成了哪些步骤 "
+                                       f"②还剩什么没做 ③下一步打算怎么做。{tail_guide}",
+                        }]
+                        summary_parts = []
+                        async with aclosing(model_events(llm_client.chat_stream_tools(
+                            ask, model=model, reasoning_effort=reasoning_effort,
+                        ))) as stream:  # 不带 tools,纯总结
+                            async for kind, data in stream:
+                                if kind == "interjection":
+                                    if summary_parts:
+                                        yield AgentEvent("message_end", {"content": "".join(summary_parts)})
+                                    append_interjections(data)
+                                    yield AgentEvent("interjection_applied", {"count": len(data)})
+                                    interrupted = True
+                                    break
+                                if kind == "aborted":
+                                    yield self._abort_event(messages)
+                                    yield AgentEvent("done", {"aborted": True})
+                                    return
+                                if kind == "delta":
+                                    summary_parts.append(str(data))
+                                    yield AgentEvent("message_delta", {"delta": data})
+                                elif kind == "retry":
+                                    yield AgentEvent("llm_retry", {**data, "step": step + 1})
+                                elif kind == "done":
+                                    summary = (data or {}).get("content", "") or ""
+                    except Exception:
+                        summary = ""
+                    if append_interjections():
+                        interrupted = True
+                        yield AgentEvent("interjection_applied", {})
+                    if interrupted:
+                        hard_limit = max(hard_limit, step + max(_HARD_STEP_LIMIT, max_steps * 10))
+                        next_limit = max(next_limit, step + max_steps)
+                        continue
+                    tail = {
+                        "context_limit": "(上下文已接近模型窗口上限，已保存断点；发送“继续”即可接着做。)",
+                        "spinning": "(检测到连续重复操作，已停止以免原地打转；请纠正要求或发送“继续”。)",
+                        "step_limit": "(任务达到绝对安全上限，已保存断点；任务可能过大或陷入复杂循环，请拆分任务后重试。)",
+                    }[stop_reason]
+                    if response_language == "en":
+                        tail = {
+                            "context_limit": '(The model context limit is near. Progress saved; send "continue" to resume.)',
+                            "spinning": '(Repeated operations detected. Stopped to avoid a loop; correct the request or send "continue".)',
+                            "step_limit": '(The task safety limit was reached. Progress saved; split the task into smaller steps and retry.)',
+                        }[stop_reason]
+                    full = (summary + "\n\n" + tail) if summary else tail
+                yield AgentEvent("message_end", {"content": full})
+                messages.append({"role": "assistant", "content": full})
+                self._active_messages = messages
+                await self._maybe_remember(user_input, full)
+                # 把【完整工作上下文】交回上层保存,用户点"继续"时能从断点精确续做
+                # (只带回文字轨迹,截图已在过程中被剔除,不占空间)
+                yield AgentEvent("truncated", {
+                    "summary": summary or full,
+                    "resume_messages": _complete_tool_pairs(messages),
+                    "steps_done": step,
+                    "reason": stop_reason,
+                })
+                yield AgentEvent("done", {"truncated": True})
+                return
+
             # 流式:边生成边把文字吐给前端(先出字,主观上快很多);
             # 同时拿到拼好的 tool_calls,决定是继续调工具还是收尾。
             msg: dict[str, Any] = {}
             streamed = False          # 这一轮有没有已经流给用户的文字
+            stream_parts: list[str] = []
+            generation_interrupted = False
             # 工具可在上一轮由 tool_create 动态加入,每步都取最新 schema。
             schemas = self.tools.all_schemas()
             if self.tools.get(_RESULT_REF_TOOL) is None:
                 schemas.append(_RESULT_REF_SCHEMA)
             llm_started = time.perf_counter()
             try:
-                async for kind, data in llm_client.chat_stream_tools(
+                async with aclosing(model_events(llm_client.chat_stream_tools(
                     messages, tools=schemas, model=model, reasoning_effort=reasoning_effort,
-                ):
-                    if self.abort_fn is not None and self.abort_fn():
-                        yield AgentEvent("llm_timing", {"step": step + 1, "llm_ms": max(0, round((time.perf_counter() - llm_started) * 1000))})
-                        yield self._abort_event(messages)
-                        yield AgentEvent("done", {"aborted": True})
-                        return
-                    if kind == "delta":
-                        streamed = True
-                        yield AgentEvent("message_delta", {"delta": data})
-                    elif kind == "retry":
-                        yield AgentEvent("llm_retry", {**data, "step": step + 1})
-                    elif kind == "done":
-                        msg = data or {}
+                ))) as stream:
+                    async for kind, data in stream:
+                        if kind == "interjection":
+                            if streamed:
+                                partial = "".join(stream_parts)
+                                yield AgentEvent("message_end", {"content": partial})
+                                messages.append({"role": "assistant", "content": partial})
+                            append_interjections(data)
+                            self._active_messages = messages
+                            yield AgentEvent("interjection_applied", {"count": len(data)})
+                            generation_interrupted = True
+                            break
+                        if kind == "aborted":
+                            yield self._abort_event(messages)
+                            yield AgentEvent("done", {"aborted": True})
+                            return
+                        if self.abort_fn is not None and self.abort_fn():
+                            yield AgentEvent("llm_timing", {"step": step + 1, "llm_ms": max(0, round((time.perf_counter() - llm_started) * 1000))})
+                            yield self._abort_event(messages)
+                            yield AgentEvent("done", {"aborted": True})
+                            return
+                        if kind == "delta":
+                            streamed = True
+                            stream_parts.append(str(data))
+                            yield AgentEvent("message_delta", {"delta": data})
+                        elif kind == "retry":
+                            yield AgentEvent("llm_retry", {**data, "step": step + 1})
+                        elif kind == "done":
+                            msg = data or {}
             except asyncio.CancelledError:
                 yield AgentEvent("llm_timing", {"step": step + 1, "llm_ms": max(0, round((time.perf_counter() - llm_started) * 1000))})
                 yield self._abort_event(messages)
@@ -1296,6 +1440,9 @@ class Agent:
                 return
 
             yield AgentEvent("llm_timing", {"step": step + 1, "llm_ms": max(0, round((time.perf_counter() - llm_started) * 1000))})
+
+            if generation_interrupted:
+                continue
 
             tool_calls = msg.get("tool_calls") or []
 
@@ -1324,6 +1471,7 @@ class Agent:
                         reply_message[key] = msg[key]
                 messages.append(reply_message)
                 if append_interjections():
+                    yield AgentEvent("interjection_applied", {})
                     continue
                 await self._maybe_remember(user_input, content)
                 yield AgentEvent("done", {})
@@ -1357,10 +1505,12 @@ class Agent:
                         yield AgentEvent("tool_result", {
                             "name": skipped_name,
                             "result": skipped_result,
-                            "ok": False,
+                            "ok": True,
+                            "skipped": True,
                             "interrupted": True,
                         })
                     append_interjections(inserted)
+                    yield AgentEvent("interjection_applied", {"count": len(inserted)})
                     batch_interrupted = True
                     break
                 fn = call["function"]
@@ -1674,70 +1824,12 @@ class Agent:
 
             messages = _complete_tool_pairs(messages)
             self._active_messages = messages
-            if batch_interrupted or append_interjections():
+            if batch_interrupted:
+                continue
+            if append_interjections():
+                yield AgentEvent("interjection_applied", {})
                 continue
 
-        # 触发保护:让模型基于完整工作上下文,总结"已做了什么、还差什么"。
-        # 把这段总结作为回复存进历史,这样用户说"继续"时,下一轮能凭它接着做,
-        # 而不是像以前那样只剩零散文字、模型不知道进行到哪。
-        summary = ""
-        if stop_reason == "context_exhausted":
-            # 当前模型容纳不下时跳过总结；保留进度供切换更大窗口模型后继续。
-            # 43.7:超线主因是图片还是文字,措辞要指对方向。
-            full = _context_exhausted_message(messages)
-        else:
-            try:
-                reason_text = {
-                    "context_limit": "上下文已接近当前模型的窗口上限",
-                    "spinning": "调整策略后仍检测到操作循环持续产生相同结果",
-                    "step_limit": "任务达到了防止无限执行的绝对安全上限",
-                }[stop_reason]
-                tail_guide = {
-                    "context_limit": "这样我说\"继续\"时你能接着干。",
-                    "spinning": "这样我说\"继续\"时你能接着干。",
-                    "step_limit": "请说清任务规模已经超了、建议怎么拆成几个更小的任务。",
-                }[stop_reason]
-                ask = messages + [{
-                    "role": "user",
-                    "content": f"任务还没做完，{reason_text}。请遵循用户要求及回复语言偏好，简要总结:①已经完成了哪些步骤 "
-                               f"②还剩什么没做 ③下一步打算怎么做。{tail_guide}",
-                }]
-                async for kind, data in llm_client.chat_stream_tools(
-                    ask, model=model, reasoning_effort=reasoning_effort,
-                ):  # 不带 tools,纯总结
-                    if kind == "delta":
-                        yield AgentEvent("message_delta", {"delta": data})
-                    elif kind == "retry":
-                        yield AgentEvent("llm_retry", {**data, "step": step + 1})
-                    elif kind == "done":
-                        summary = (data or {}).get("content", "") or ""
-            except Exception:
-                summary = ""
-            tail = {
-                "context_limit": "(上下文已接近模型窗口上限，已保存断点；发送“继续”即可接着做。)",
-                "spinning": "(检测到连续重复操作，已停止以免原地打转；请纠正要求或发送“继续”。)",
-                "step_limit": "(任务达到绝对安全上限，已保存断点；任务可能过大或陷入复杂循环，请拆分任务后重试。)",
-            }[stop_reason]
-            if response_language == "en":
-                tail = {
-                    "context_limit": '(The model context limit is near. Progress saved; send "continue" to resume.)',
-                    "spinning": '(Repeated operations detected. Stopped to avoid a loop; correct the request or send "continue".)',
-                    "step_limit": '(The task safety limit was reached. Progress saved; split the task into smaller steps and retry.)',
-                }[stop_reason]
-            full = (summary + "\n\n" + tail) if summary else tail
-        yield AgentEvent("message_end", {"content": full})
-        messages.append({"role": "assistant", "content": full})
-        self._active_messages = messages
-        await self._maybe_remember(user_input, full)
-        # 把【完整工作上下文】交回上层保存,用户点"继续"时能从断点精确续做
-        # (只带回文字轨迹,截图已在过程中被剔除,不占空间)
-        yield AgentEvent("truncated", {
-            "summary": summary or full,
-            "resume_messages": _complete_tool_pairs(messages),
-            "steps_done": step,
-            "reason": stop_reason,
-        })
-        yield AgentEvent("done", {"truncated": True})
 
     @staticmethod
     def _tool_msg(call_id: str, content: str) -> dict[str, Any]:
