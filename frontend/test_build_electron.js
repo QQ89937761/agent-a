@@ -59,3 +59,46 @@ try {
   assert(relative && !relative.startsWith("..") && !path.isAbsolute(relative), "cleanup must stay in temp directory");
   fs.rmSync(root,{recursive:true,force:true});
 }
+
+// Run the actual release verifier's archive reader with both platform path conventions.
+{
+  const vm = require("node:vm");
+  const source = fs.readFileSync(path.join(__dirname, "../deploy/verify_release.py"), "utf8");
+  const script = source.match(/script = r'''([\s\S]*?)'''/)[1];
+  for (const nativePath of [path.win32, path.posix]) {
+    const contents = {"package.json": Buffer.from('{"version":"fixture"}'),
+      "src/vendor/katex/katex.min.js": Buffer.from("verified formula renderer\r\n"),
+      "src/vendor/katex/LICENSE": Buffer.from("MIT license")};
+    const directories = ["src", "src/vendor", "src/vendor/katex"];
+    const normalize = name => nativePath.normalize(name);
+    const lookup = new Map(Object.entries(contents).map(([name, value]) => [normalize(name), value]));
+    const directoryNames = new Set(directories.map(normalize));
+    const reader = {
+      listPackage() {return [...directories, ...Object.keys(contents)].map(name => nativePath.sep + normalize(name));},
+      statFile(_archive, name) {
+        assert.equal(name, normalize(name), "ASAR lookup must use the platform separator, including nested directories");
+        if (directoryNames.has(name)) return {files: {}};
+        assert(lookup.has(name), "missing nested archive entry: " + name);
+        return {size: lookup.get(name).length};
+      },
+      extractFile(_archive, name) {
+        assert.equal(name, normalize(name));
+        assert(lookup.has(name));
+        return lookup.get(name);
+      },
+    };
+    for (const normalizedText of [false, true]) {
+      let actual;
+      vm.runInNewContext(script, {
+        require: name => name === "node:path" ? nativePath : name === "node:crypto" ? crypto : reader,
+        process: {argv: ["node", "fixture.asar", String(normalizedText)]},
+        console: {log(value) {actual = JSON.parse(value);}},
+      });
+      assert.deepEqual(Object.keys(actual.files).sort(), Object.keys(contents).sort());
+      assert.equal(actual.package.version, "fixture");
+      const bytes = normalizedText ? contents["src/vendor/katex/katex.min.js"].toString().replace(/\r\n/g, "\n") : contents["src/vendor/katex/katex.min.js"];
+      assert.equal(actual.files["src/vendor/katex/katex.min.js"], crypto.createHash("sha256").update(bytes).digest("hex"));
+    }
+  }
+  console.log("ASAR verification: Windows/POSIX nested paths and exact/normalized hashes passed");
+}

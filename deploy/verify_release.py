@@ -122,13 +122,15 @@ def _verify(root: Path, resources: Path, *, compare_staging: bool, dependency_ro
     script = r'''
 const asar = require('./frontend/node_modules/@electron/asar');
 const crypto = require('node:crypto');
+const path = require('node:path');
 const archive = process.argv[1];
 const files = {};
 const normalizeText = process.argv[2] === 'true';
 for (const entry of asar.listPackage(archive)) {
   const name = entry.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!asar.statFile(archive, name).files) {
-    const content = asar.extractFile(archive, name);
+  const archivePath = path.normalize(name);
+  if (!asar.statFile(archive, archivePath).files) {
+    const content = asar.extractFile(archive, archivePath);
     files[name] = crypto.createHash('sha256').update(normalizeText && /\.(js|html|css|json)$/.test(name) ? content.toString('utf8').replace(/\r\n/g, '\n') : content).digest('hex');
   }
 }
