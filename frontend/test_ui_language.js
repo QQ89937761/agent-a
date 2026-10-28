@@ -324,22 +324,88 @@ const englishLatestReleaseNotes = [
   "",
   "This project is released under the PolyForm Noncommercial License 1.0.0. Commercial use is prohibited unless separately authorized in writing.",
 ].join("\n");
+const release1048Notes = [
+  "## 小A 1.0.48",
+  "",
+  "- 消息定位预览固定使用当前明暗主题的实色背景，避免下方聊天文字透出，保留平滑展开与滚动。",
+  "- 聊天回复支持本地公式渲染，正常显示米、平方米、上下标、比较符号和分数；兼容历史消息和流式回复，代码块及普通金额保持原样。",
+  "- 修复 Windows 发布校验读取多层目录时的路径问题，逐项核对内置公式组件和许可文件。",
+  "",
+  "公式渲染内置于便携版，不依赖外部 CDN。此版本包含未发布成功的 1.0.47 全部修复。",
+  "",
+  "升级前请正常退出小A，保留同目录完整 `XiaoA-data` 文件夹。禁止商业使用，许可见仓库 LICENSE。",
+  "",
+].join("\n");
+const englishRelease1048Notes = [
+  "## XiaoA 1.0.48",
+  "",
+  "- Message navigation previews now use a solid background matching the current light or dark theme, preventing chat text from showing through while preserving smooth expansion and scrolling.",
+  "- Chat replies now render formulas locally, displaying meters, square meters, superscripts, subscripts, comparison symbols and fractions correctly. This works with past messages and streaming replies; code blocks and ordinary monetary amounts remain unchanged.",
+  "- Fixed a Windows release-verification path issue when reading nested directories, and verified the bundled formula components and license files individually.",
+  "",
+  "Formula rendering is built into the portable edition and does not depend on an external CDN. This version includes all fixes from the unsuccessful 1.0.47 release.",
+  "",
+  "Before upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.",
+  "",
+].join("\n");
+const release1049Notes = [
+  "## 小A 1.0.49",
+  "",
+  "- 语音唤醒旁新增停止播放按钮，可立即停止当前朗读；关闭语音唤醒时，同时停止回复和唤醒应答。",
+  "- 停止播放后，尚未完成的语音合成不会重新播放；任务和文字回复继续，下一轮语音对话可正常朗读。",
+  "- 优化麦克风录音的采样率转换和抗混叠处理，长录音优先在停顿处切段；识别文本仍可在发送前审阅。",
+  "- 补齐版本与更新说明的英文翻译，支持动态加载和中英切换。",
+  "",
+  "升级前请正常退出小A，保留同目录完整 `XiaoA-data` 文件夹。禁止商业使用，许可见仓库 LICENSE。",
+  ""
+].join("\n");
+const englishRelease1049Notes = [
+  "## XiaoA 1.0.49",
+  "",
+  "- Added a stop-playback button beside Voice wake-up to stop speech immediately. Turning off Voice wake-up also stops replies and the wake greeting.",
+  "- Pending speech synthesis no longer restarts playback after you stop it. Tasks and text replies continue, and speech resumes on the next voice conversation turn.",
+  "- Improved microphone sample-rate conversion and anti-aliasing, with long recordings split at pauses where possible. You can still review recognized text before sending.",
+  "- Completed English translations for version and update notes, including dynamically loaded notes and Chinese/English switching.",
+  "",
+  "Before upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.",
+  ""
+].join("\n");
+for (const newline of ["\n", "\r\n"]) {
+  assert.equal(translate(release1049Notes.replace(/\n/g, newline), "en"), englishRelease1049Notes.replace(/\n/g, newline));
+  assert.equal(translate(release1049Notes.replace(/\n/g, newline), "zh"), release1049Notes.replace(/\n/g, newline));
+}
+for (const newline of ["\n", "\r\n"]) {
+  const source = release1048Notes.replace(/\n/g, newline);
+  const expected = englishRelease1048Notes.replace(/\n/g, newline);
+  assert.equal(translate(source, "en"), expected);
+  assert.equal(translate(source, "zh"), source);
+}
+assert.equal(translate("用户自定义更新说明保持原样\n不要修改文件名", "en"), "用户自定义更新说明保持原样\n不要修改文件名");
 assert.equal(translate(latestReleaseNotes, "en"), englishLatestReleaseNotes);
 assert.equal(translate(latestReleaseNotes, "zh"), latestReleaseNotes);
 assert.equal(translate(latestReleaseNotes.replace(/\n/g, "\r\n"), "en"), englishLatestReleaseNotes.replace(/\n/g, "\r\n"));
-{
+for (const [source, expected] of [
+  [latestReleaseNotes, englishLatestReleaseNotes],
+  [release1048Notes, englishRelease1048Notes],
+  [release1049Notes, englishRelease1049Notes],
+]) {
   const body = element(), releaseNotes = element("DIV", {}, body);
   body.childNodes.push(releaseNotes);
   releaseNotes.closest = selector => selector.startsWith("script, style") ? null
     : selector.split(/,\s*/).includes(".hint") ? releaseNotes : null;
   const app = runtime("en", false, body);
-  const noteText = appendText(releaseNotes, latestReleaseNotes);
+  const noteText = appendText(releaseNotes, source);
   app.mutate([{type:"childList", addedNodes:[noteText]}]);
-  assert.equal(noteText.nodeValue, englishLatestReleaseNotes);
-  app.window.XiaoALanguage.set("zh");
-  assert.equal(noteText.nodeValue, latestReleaseNotes);
-  app.window.XiaoALanguage.set("en");
-  assert.equal(noteText.nodeValue, englishLatestReleaseNotes);
+  assert.equal(noteText.nodeValue, expected);
+  for (let i = 0; i < 3; i++) {
+    app.window.XiaoALanguage.set("zh");
+    assert.equal(noteText.nodeValue, source);
+    app.window.XiaoALanguage.set("en");
+    assert.equal(noteText.nodeValue, expected);
+  }
+  noteText.nodeValue = source;
+  app.mutate([{type:"characterData", target:noteText}]);
+  assert.equal(noteText.nodeValue, expected);
 }
 for (const [line, expected] of [
   ["[08:05:27] 云端连接成功，worker 已上线", "[08:05:27] Cloud connected successfully; worker is online"],

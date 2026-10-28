@@ -725,7 +725,7 @@ if (toggleCount !== 1) {
   const playEnd = html.indexOf("function onWakeTriggered", hiStart);
   const makeWake = new Function(
     "fetch", "ttsReliable", "voiceCloud", "API", "window", "Audio", "SpeechSynthesisUtterance", "voiceHint",
-    `${html.slice(hiStart, playEnd)}; return {refreshCachedHi, playHi};`,
+    `let wakeSession = 0, wakeActive = true; ${html.slice(hiStart, playEnd)}; return {refreshCachedHi, playHi};`,
   );
   const deferred = () => {
     let resolve;

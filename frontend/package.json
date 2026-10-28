@@ -1,12 +1,12 @@
 {
   "name": "desktop-agent-frontend",
-  "version": "1.0.48",
+  "version": "1.0.49",
   "description": "小A 桌面悬浮助手(Electron)",
   "main": "main.js",
   "author": "XiaoA",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/ui-language.js && node test_ui_language.js && node --check main.js && node --check chat_background.js && node --check preload.js && node --check login_item.js && node --check plugin_runtimes.js && node --check float_position.js && node --check float_alert.js && node --check src/markdown-table.js && node --check src/chat-navigator.js && node test_build_electron.js && node test_float_alert.js && node test_inline_script.js && node test_task_trace.js && node test_chat_navigator.js && node test_markdown_table.js && node --check src/math-renderer.js && node test_math_renderer.js && node test_plugin_runtimes.js && node test_output_workspace.js && node test_deferred_conversations.js && node test_chat_background.js && node test_cloud_deploy.js && node test_portable_update.js && node test_main_startup.js",
+    "check": "node --check src/ui-language.js && node test_ui_language.js && node --check main.js && node --check chat_background.js && node --check preload.js && node --check login_item.js && node --check plugin_runtimes.js && node --check float_position.js && node --check float_alert.js && node --check src/markdown-table.js && node --check src/chat-navigator.js && node test_build_electron.js && node test_float_alert.js && node test_inline_script.js && node test_voice_controls.js && node test_task_trace.js && node test_chat_navigator.js && node test_markdown_table.js && node --check src/math-renderer.js && node test_math_renderer.js && node test_plugin_runtimes.js && node test_output_workspace.js && node test_deferred_conversations.js && node test_chat_background.js && node test_cloud_deploy.js && node test_portable_update.js && node test_main_startup.js",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File ../deploy/build_backend.ps1",
     "prepare:plugin-runtimes": "powershell -NoProfile -ExecutionPolicy Bypass -File ../deploy/prepare_plugin_runtimes.ps1",
     "dist": "npm run check && npm run test:backend && npm run build:backend && npm run prepare:plugin-runtimes && node build_electron.js && python ../deploy/smoke_backend.py dist/XiaoA.exe --portable",

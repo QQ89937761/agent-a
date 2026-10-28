@@ -453,7 +453,11 @@
 
     .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; padding: 0 4px; font-size: 12px; color: var(--ink-soft); }
     .toolbar label { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--radius); cursor: pointer; }
-    #voiceHint { color: var(--brand); }
+    #voiceHint { color: var(--brand); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    #stopSpeech { width: 30px; height: 30px; background: var(--control); color: var(--ink-soft); border: none; }
+    #stopSpeech:hover { background: var(--control-hover); }
+    #stopSpeech svg { width: 15px; height: 15px; }
+    @media (pointer: coarse) { #stopSpeech { width: 44px; height: 44px; } }
 
     .menu-wrap { position: relative; min-width: 0; }
     .capsule {
@@ -964,6 +968,9 @@
         语音唤醒
         <span class="switch"><input type="checkbox" id="wakeToggle"><span class="track"></span></span>
       </label>
+      <button class="round-btn" id="stopSpeech" type="button" title="停止语音播放" aria-label="停止语音播放">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7h10v10H7z" fill="currentColor" /></svg>
+      </button>
       <span id="voiceHint"></span>
     </div>
     <div class="composer-shell">
@@ -3067,6 +3074,7 @@
       renderAttachments();
       setBusy(true);
       if (isContinuous) {
+        replySpeechStopped = false;
         continuousAwaitingReply = true;
         continuousQueued = false;
         continuousTaskDone = false; continuousReplyReady = false; continuousReplyText = "";
@@ -3088,9 +3096,7 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "stop" }));
       }
-      cancelSpeech();
-      speakNextReply = false; wakeReplyText = "";
-      if (hiAudio) { try { hiAudio.pause(); hiAudio.currentTime = 0; } catch (_) {} }
+      stopSpeechPlayback();
       statusEl.textContent = "";
       setBusy(false);
       if (continuousActive) await stopContinuousMode(true);
@@ -3176,6 +3182,7 @@
     const voiceHint = document.getElementById("voiceHint");
     let ttsAudio = null;
     let ttsResolve = null, browserSpeechResolve = null;
+    let replySpeechStopped = false;
     let speakSeq = 0;   // 递增序号:新的一次朗读会作废上一次未播完的分段
     let speakNextReply = false;  // 下一条回复是否朗读(仅唤醒触发的那轮为 true)
     // 唤醒轮里,走工具的任务会先发一条"边想边说"的开场白(message/message_end),
@@ -3233,6 +3240,23 @@
       return parts.filter(function (p) { return p.trim(); });
     }
 
+    function stopSpeechPlayback() {
+      hiPlaybackSeq++;
+      replySpeechStopped = true;
+      speakNextReply = false;
+      wakeReplyText = "";
+      cancelSpeech();
+      if (hiAudio) {
+        const audio = hiAudio; hiAudio = null;
+        try { audio.pause(); audio.currentTime = 0; } catch (_) {}
+      }
+    }
+    document.getElementById("stopSpeech").onclick = () => {
+      stopSpeechPlayback();
+      if (!recording) voiceHint.textContent = "已停止语音播放";
+      maybeCompleteContinuousReply();
+    };
+
     async function ttsOne(text, voice) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
@@ -3270,6 +3294,7 @@
     }
 
     async function speakPart(text, mySeq, preparedAudio) {
+      if (replySpeechStopped || mySeq !== speakSeq) return;
       const clean = (text || "").replace(/[*#`_>\-]/g, "").trim();
       if (!clean) return;
 
@@ -3325,7 +3350,7 @@
       // 只有连续对话才边流边念。唤醒轮不在这里念:走工具时先来的是开场白,
       // 边流边念就会把 speakNextReply 消费在开场白上,最终答案反而不念。
       // 唤醒轮的做法是在 message/message_end 里累积最新正文,done 时统一念(见 handleEvent)。
-      if (!continuous) return null;
+      if (!continuous || replySpeechStopped) return null;
       cancelSpeech();
       streamSpeech = {
         buffer: "", chain: Promise.resolve(), pending: 0, ended: false,
@@ -3434,6 +3459,11 @@
         return;
       }
       const token = continuousToken;
+      if (replySpeechStopped) {
+        continuousAwaitingReply = false;
+        void resumeContinuousAfterSpeech({token});
+        return;
+      }
       if (!continuousReplyReady) {
         setTimeout(() => {
           if (continuousActive && continuousAwaitingReply && continuousTaskDone && token === continuousToken) {
@@ -3462,6 +3492,7 @@
     let audioCtx = null, mediaStream = null, procNode = null, srcNode = null;
     let cachedMicStream = null, micIdleTimer = null;
     let pcmChunks = [], recording = false;
+    let recognitionSeq = 0;
 
     async function acquireMicStream() {
       if (!cachedMicStream || cachedMicStream.getAudioTracks().every(track => track.readyState !== "live")) {
@@ -3494,7 +3525,16 @@
       return out;
     }
     function downsample(buffer, inRate, outRate) {
-      if (outRate >= inRate) return buffer;
+      if (!buffer.length || outRate === inRate) return buffer;
+      if (outRate > inRate) {
+        const result = new Float32Array(Math.ceil(buffer.length * outRate / inRate));
+        for (let i = 0; i < result.length; i++) {
+          const position = i * inRate / outRate, left = Math.floor(position);
+          const right = Math.min(left + 1, buffer.length - 1);
+          result[i] = buffer[left] + (buffer[right] - buffer[left]) * (position - left);
+        }
+        return result;
+      }
       const ratio = inRate / outRate;
       const newLen = Math.round(buffer.length / ratio);
       const result = new Float32Array(newLen);
@@ -3507,6 +3547,51 @@
         pos++; idx = next;
       }
       return result;
+    }
+    async function resampleForAsr(buffer, inRate, outRate) {
+      if (!buffer.length || inRate === outRate) return buffer;
+      const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OfflineContext) return downsample(buffer, inRate, outRate);
+      const context = new OfflineContext(1, buffer.length, inRate);
+      const input = context.createBuffer(1, buffer.length, inRate);
+      input.copyToChannel(buffer, 0);
+      const source = context.createBufferSource();
+      source.buffer = input;
+      let output = source;
+      if (inRate > outRate) {
+        // Filter at the source rate before decimation; changing context rate alone can alias.
+        for (let i = 0; i < 3; i++) {
+          const filter = context.createBiquadFilter();
+          filter.type = "lowpass";
+          filter.frequency.value = outRate * .45;
+          filter.Q.value = -3;
+          output.connect(filter);
+          output = filter;
+        }
+      }
+      output.connect(context.destination);
+      source.start();
+      return downsample((await context.startRendering()).getChannelData(0), inRate, outRate);
+    }
+    function splitAsrPcm(samples) {
+      const limit = 16000 * 55, windowSize = 320, lookback = 16000 * 5;
+      const segments = [];
+      for (let start = 0; start < samples.length;) {
+        let end = Math.min(start + limit, samples.length);
+        if (end < samples.length) {
+          const searchEnd = end;
+          let quietest = 500 * 500;
+          for (let pos = searchEnd - lookback; pos + windowSize <= searchEnd; pos += windowSize) {
+            let energy = 0;
+            for (let i = pos; i < pos + windowSize; i++) energy += samples[i] * samples[i];
+            energy /= windowSize;
+            if (energy <= quietest) { quietest = energy; end = pos + windowSize; }
+          }
+        }
+        segments.push(samples.subarray(start, end));
+        start = end;
+      }
+      return segments;
     }
     function encodeWav(samples, sampleRate) {
       const buf = new ArrayBuffer(44 + samples.length * 2);
@@ -3609,17 +3694,21 @@
       await stopRecordingAndSend(sourceMode);
     }
     async function releaseRecording() {
+      const context = audioCtx;
       try { procNode.disconnect(); srcNode.disconnect(); } catch (_) {}
       parkMicStream(mediaStream);
-      try { audioCtx && await audioCtx.close(); } catch (_) {}
       audioCtx = mediaStream = procNode = srcNode = analyser = null;
+      try { context && await context.close(); } catch (_) {}
     }
     async function cancelRecording() {
+      recognitionSeq++;
+      fromWake = false;
       recording = false; mode = null; pcmChunks = [];
       micBtn.classList.remove("listening");
       await releaseRecording();
     }
     async function stopRecordingAndSend(sourceMode) {
+      const requestSeq = recognitionSeq, wakeTurn = fromWake;
       const inRate = audioCtx.sampleRate;
       try { procNode.disconnect(); srcNode.disconnect(); } catch (_) {}
       parkMicStream(mediaStream);
@@ -3627,29 +3716,31 @@
       let len = pcmChunks.reduce((a, c) => a + c.length, 0);
       const merged = new Float32Array(len);
       let o = 0; for (const c of pcmChunks) { merged.set(c, o); o += c.length; }
-      const pcm16 = floatTo16BitPCM(downsample(merged, inRate, 16000));
-      try { audioCtx && await audioCtx.close(); } catch (_) {}
+      const context = audioCtx;
       audioCtx = mediaStream = procNode = srcNode = analyser = null;
+      try { context && await context.close(); } catch (_) {}
+      if (requestSeq !== recognitionSeq) return;
       const continuousTurn = sourceMode === "continuous" && continuousActive;
       const turnToken = continuousToken;
       if (continuousTurn) setContinuousState("transcribing");
-      // 腾讯云一句话识别单次上限约60秒/3MB。超长就切成 ≤55秒 多段分别识别再拼接,
-      // 这样说多长都行,不会再报 "Data larger than 3MB",也不丢内容。
-      const CHUNK = 16000 * 55;
+      // 每段最多55秒，长录音优先在末尾5秒的停顿处切分，不重复或丢弃采样。
       voiceHint.textContent = "识别中…";
-      const slowTimer = setTimeout(() => { voiceHint.textContent = "识别中…网络较慢"; }, 3000);
+      const slowTimer = setTimeout(() => {
+        if (requestSeq === recognitionSeq) voiceHint.textContent = "识别中…网络较慢";
+      }, 3000);
       try {
+        const pcm16 = floatTo16BitPCM(await resampleForAsr(merged, inRate, 16000));
+        if (requestSeq !== recognitionSeq) return;
         let full = "";
-        const total = Math.ceil(pcm16.length / CHUNK) || 1;
-        for (let i = 0; i < pcm16.length || i === 0; i += CHUNK) {
-          if (total > 1) voiceHint.textContent = `识别中…(${Math.floor(i / CHUNK) + 1}/${total} 段)`;
-          const seg = pcm16.subarray(i, Math.min(i + CHUNK, pcm16.length));
-          if (!seg.length) break;
+        const segments = splitAsrPcm(pcm16);
+        for (let i = 0; i < segments.length; i++) {
+          if (segments.length > 1) voiceHint.textContent = `识别中…(${i + 1}/${segments.length} 段)`;
+          const seg = segments[i];
           const d = await asrChunk(seg, continuousTurn && continuousAbort ? continuousAbort.signal : null);
-          if (continuousTurn && (!continuousActive || turnToken !== continuousToken)) return;
+          if (requestSeq !== recognitionSeq ||
+              (continuousTurn && (!continuousActive || turnToken !== continuousToken))) return;
           if (d.ok && d.text) full += d.text;
           else if (!d.ok) throw new Error(d.error || "识别失败");
-          if (i + CHUNK >= pcm16.length) break;
         }
         voiceHint.textContent = "";
         const clean = full.trim();
@@ -3665,7 +3756,7 @@
               voiceHint.textContent = "⚠ 服务未连接";
               await stopContinuousMode(false);
             }
-          } else if (fromWake) {
+          } else if (wakeTurn) {
             // 唤醒后自动录到的可能只是口水音/环境噪音("嗯""啊"…)。
             // 这种含糊内容别当指令发出去,否则小A 只能"看屏幕"猜你要干嘛(就是它老截屏的原因)。
             // 注意:fromWake 的复位统一放到本函数末尾的 finally,保证"识别为空/异常/口水音"
@@ -3688,6 +3779,7 @@
           setTimeout(() => startContinuousListening(turnToken), 350);
         } else voiceHint.textContent = "⚠ 没识别到内容";
       } catch (e) {
+        if (requestSeq !== recognitionSeq) return;
         if (continuousTurn && (!continuousActive || e.name === "AbortError" || /abort/i.test(e.message))) return;
         voiceHint.textContent = "⚠ 识别失败:" + e.message;
         if (continuousTurn) setTimeout(() => startContinuousListening(turnToken), 700);
@@ -3695,7 +3787,7 @@
         clearTimeout(slowTimer);
         // 无论成功发送、识别为空、口水音还是异常,都复位唤醒标记。否则任一失败路径
         // 漏清零,onWakeTriggered 开头的 `if (fromWake) return` 会永久拦截,唤醒失效。
-        fromWake = false;
+        if (requestSeq === recognitionSeq) fromWake = false;
       }
     }
 
@@ -3707,6 +3799,7 @@
     const LONG_PRESS = 350;     // 按下超过这么久没松 = 长按
 
     async function beginRecording() {
+      recognitionSeq++;
       cancelSpeech();
       await startRecording();
       recording = true;
@@ -3788,6 +3881,7 @@
     ];
     let wakeCtx = null, wakeStream = null, wakeAnalyser = null, wakeProc = null, wakeSrc = null;
     let wakeChunks = [], wakeActive = false, wakeBusy = false, wakeLocalWs = null;
+    let wakeSession = 0;
 
     function isWakeWord(text) {
       const t = (text || "").toLowerCase().replace(/[,。!?、\s]/g, "");
@@ -3804,10 +3898,15 @@
     }
 
     // 云端唤醒:持续监听音量,有人声才录一小段发 ASR 查唤醒词(省成本)
-    async function startCloudWake() {
-      wakeStream = await navigator.mediaDevices.getUserMedia({ audio: {
+    async function startCloudWake(session) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: {
         echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       } });
+      if (session !== wakeSession || !wakeToggle.checked) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      wakeStream = stream;
       wakeCtx = new (window.AudioContext || window.webkitAudioContext)();
       wakeSrc = wakeCtx.createMediaStreamSource(wakeStream);
       wakeAnalyser = wakeCtx.createAnalyser(); wakeAnalyser.fftSize = 512;
@@ -3853,15 +3952,18 @@
       if (!chunks.length) return;
       if (wakeBusy) { wakePendingClip = chunks; return; }
       wakeBusy = true;
+      const session = wakeSession;
       const inRate = wakeCtx.sampleRate;
       let len = chunks.reduce((a, c) => a + c.length, 0);
       const merged = new Float32Array(len);
       let o = 0; for (const c of chunks) { merged.set(c, o); o += c.length; }
       const slowTimer = setTimeout(() => {
-        if (wakeActive && !recording) voiceHint.textContent = "👂 唤醒识别网络较慢…仍在监听";
+        if (session === wakeSession && wakeActive && !recording) voiceHint.textContent = "👂 唤醒识别网络较慢…仍在监听";
       }, 3000);
       try {
-        const wav = encodeWav(floatTo16BitPCM(downsample(merged, inRate, 16000)), 16000);
+        const samples = await resampleForAsr(merged, inRate, 16000);
+        if (session !== wakeSession || !wakeActive) return;
+        const wav = encodeWav(floatTo16BitPCM(samples), 16000);
         const b64 = await blobToBase64(wav);
         const r = await fetch(API + "/api/asr", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -3869,10 +3971,11 @@
         });
         const d = await r.json();
         // 若这期间用户已把唤醒关了,识别结果就不再触发(修"关了还唤醒"的竞态)
-        if (wakeActive && d.ok && isWakeWord(d.text)) onWakeTriggered();
+        if (session === wakeSession && wakeActive && d.ok && isWakeWord(d.text)) onWakeTriggered();
       } catch (_) {}
       finally {
         clearTimeout(slowTimer);
+        if (session !== wakeSession) return;
         if (wakeActive && !recording && voiceHint.textContent.includes("网络较慢")) {
           voiceHint.textContent = "👂 唤醒已开启";
         }
@@ -3883,6 +3986,7 @@
       }
     }
     let cachedHi = null;   // 按已保存音色复用合成中的请求，避免预加载和首次唤醒互相覆盖。
+    let hiPlaybackSeq = 0;
     let hiAudio = null;    // 独立于回复播放器，录音不会掐断“我在”。
     function voiceSignature(v) {
       return `${v.provider || "tencent"}|${v.voice}|${v.speed}`;
@@ -3907,9 +4011,11 @@
       return audio;
     }
     async function playHi() {
+      const seq = hiPlaybackSeq, session = wakeSession;
       // 唤醒应答只用已保存的云音色；首次等待预加载，失败时提示而不更换声音。
       try {
         const audio = await refreshCachedHi();
+        if (!wakeActive || session !== wakeSession || seq !== hiPlaybackSeq) return;
         if (audio) {
           // 独立播放器避免指令录音中断“我在”。
           if (hiAudio) { try { hiAudio.pause(); } catch (_) {} }
@@ -3918,6 +4024,7 @@
           return;
         }
       } catch (_) {
+        if (!wakeActive || session !== wakeSession || seq !== hiPlaybackSeq) return;
         voiceHint.textContent = "⚠ 无法确认或合成已设音色，请稍后重试";
         return;
       }
@@ -3928,13 +4035,16 @@
     function onWakeTriggered() {
       if (!wakeActive || fromWake || recording) return;
       voiceHint.textContent = "😊 我在,请说…";
+      replySpeechStopped = false;
+      const session = wakeSession;
       fromWake = true;          // 标记这轮由唤醒触发:指令自动发 + 回复朗读
       playHi();                 // 按已保存音色说“我在”，已缓存则直接播放
       // 进入指令录音(和"我在"并行,不用等它播完)
       setTimeout(async () => {
-        if (recording) return;
+        if (!wakeActive || session !== wakeSession || recording) return;
         try {
           await beginRecording();
+          if (!wakeActive || session !== wakeSession) { await cancelRecording(); return; }
           mode = "auto";
           startSilenceWatch();
         } catch (error) {
@@ -3947,6 +4057,7 @@
     function stopCloudWake() {
       try { wakeProc && wakeProc.disconnect(); wakeSrc && wakeSrc.disconnect(); } catch (_) {}
       if (wakeStream) wakeStream.getTracks().forEach((t) => t.stop());
+      if (wakeCtx) void wakeCtx.close().catch(() => {});
       wakeStream = wakeCtx = wakeAnalyser = wakeProc = wakeSrc = null;
       wakeChunks = []; wakePendingClip = null; wakeBusy = false;
     }
@@ -3991,6 +4102,7 @@
       const token = ++continuousToken;
       continuousPausedWake = wakeToggle.checked;
       if (continuousPausedWake) {
+        wakeSession++;
         wakeToggle.checked = false;
         wakeActive = false;
         stopCloudWake();
@@ -4031,17 +4143,29 @@
     };
 
     wakeToggle.onchange = async () => {
+      const session = ++wakeSession;
       wakeActive = false; stopCloudWake();
       if (wakeToggle.checked) {
+        replySpeechStopped = false;
         try {
-          await startCloudWake();
+          await startCloudWake(session);
+          if (session !== wakeSession || !wakeToggle.checked) return;
           wakeActive = true;
           voiceHint.textContent = "👂 唤醒开启,喊\"小A\"试试";
           // 提前合成固定应答，真正唤醒时直接播放，不再多等一次云端 TTS。
           refreshCachedHi().catch(() => {});
         }
-        catch (e) { voiceHint.textContent = "⚠ 开麦失败:" + e.message; wakeToggle.checked = false; }
+        catch (e) {
+          if (session !== wakeSession) return;
+          stopCloudWake();
+          stopSpeechPlayback();
+          voiceHint.textContent = "⚠ 开麦失败:" + e.message;
+          wakeToggle.checked = false;
+        }
       } else {
+        stopSpeechPlayback();
+        if (fromWake) await cancelRecording();
+        fromWake = false;
         voiceHint.textContent = "";
       }
     };
