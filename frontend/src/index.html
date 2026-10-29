@@ -97,7 +97,7 @@
     }
     #continuousButton {
       -webkit-app-region: no-drag; min-width: 0; height: 30px; padding: 0 7px 0 9px;
-      border: 1px solid var(--line); border-radius: 999px; background: var(--control);
+      border: 1px solid var(--border-strong); border-radius: 999px; background: var(--control);
       color: var(--ink-soft); display: inline-flex; align-items: center; gap: 7px;
       font-weight: 650; font-size: 13px; white-space: nowrap; cursor: pointer;
     }
@@ -133,7 +133,7 @@
       background: #d1495b;  /* 默认红 */
       box-shadow: 0 0 0 3px rgba(209,73,91,.15); transition: background .2s, box-shadow .2s;
     }
-    header .conn.ok::before { background: #21a366; box-shadow: 0 0 0 3px rgba(33,163,102,.18); }
+    header .conn.ok::before { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.22), 0 0 8px rgba(34,197,94,.45); }
     header .ico {
       -webkit-app-region: no-drag; cursor: pointer;
       width: 30px; height: 30px; padding: 0; border-radius: 8px; border: none; background: transparent;
@@ -143,7 +143,7 @@
     header .ico:hover { background: var(--brand-soft); }
     #conversationButton {
       position: absolute; z-index: 32; top: 68px; left: 14px; -webkit-app-region: no-drag;
-      width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 50%;
+      width: 34px; height: 34px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%;
       display: grid; place-items: center; background: var(--control); color: var(--ink-soft);
       cursor: pointer; box-shadow: 0 5px 14px rgba(20, 35, 60, .16); transition: background .15s, color .15s, transform .15s;
     }
@@ -240,7 +240,7 @@
     .window-icon::after { left: 2px; top: 2px; }
     #windowToggle[data-maximized="true"] .window-icon::before { display: block; }
     #windowToggle[data-maximized="true"] .window-icon::after { left: 1px; top: 4px; }
-    :is(#themeToggle, #languageToggle) { display: grid; place-items: center; border-radius: 50%; background: var(--control); font-size: 17px; line-height: 1; }
+    :is(#themeToggle, #languageToggle) { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--control); font-size: 17px; line-height: 1; }
     :is(#themeToggle, #languageToggle):hover { background: var(--control-hover); }
 
     #languageToggle { font-size: 13px; font-weight: 650; flex: none; }
@@ -437,15 +437,16 @@
     .round-btn {
       width: 36px; height: 36px; padding: 0; border-radius: 50%; display: inline-flex;
       align-items: center; justify-content: center; flex: none; font-size: 19px; line-height: 1;
+      border: 1px solid var(--border-strong);
     }
-    #attach { background: var(--control); color: var(--ink-soft); border: none; }
+    #attach { background: var(--control); color: var(--ink-soft); }
     #attach svg, #send svg { width: 18px; height: 18px; display: block; }
     #attach:hover { background: var(--control-hover); }
-    #send { width: 34px; height: 34px; color: #fff; font-size: 18px; font-weight: 700; }
+    #send { width: 34px; height: 34px; border: none; color: #fff; font-size: 18px; font-weight: 700; }
     #send { background: var(--brand); }
     #send.stop-mode { background: var(--danger); font-size: 13px; }
     #mic {
-      background: var(--control); color: var(--ink-soft); border: none;
+      background: var(--control); color: var(--ink-soft);
     }
     #mic svg { width: 20px; height: 20px; display: block; }
     #mic:hover { background: var(--control-hover); }
@@ -453,7 +454,7 @@
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
 
     .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; padding: 0 4px; font-size: 12px; color: var(--ink-soft); }
-    .toolbar label { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--radius); cursor: pointer; }
+    .toolbar label { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 999px; cursor: pointer; }
     #voiceHint { color: var(--brand); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     #stopSpeech { width: 30px; height: 30px; background: var(--control); color: var(--ink-soft); border: 1px solid var(--border-strong); }
     #stopSpeech:hover { background: var(--control-hover); }
@@ -618,7 +619,7 @@
     #continuousButton {
       height: 30px;
       background: var(--control);
-      border-color: var(--line);
+      border-color: var(--border-strong);
       color: var(--ink-soft);
     }
     #continuousButton:hover, #continuousButton[aria-pressed="true"] {
@@ -675,7 +676,7 @@
     #send { box-shadow: 0 4px 10px rgba(47, 111, 237, .22); }
     .capsule {
       height: 32px;
-      border-color: var(--line);
+      border-color: var(--border-strong);
       background: var(--control);
       color: var(--ink-soft);
     }
@@ -755,8 +756,9 @@
     :root[data-background="transparent"] header .ico, :root[data-background="translucent"] header .ico { background: var(--control); }
     /* 语音控件保留衬底；工具步骤在所有背景模式下均不加背景框。 */
     :root:is([data-background="translucent"], [data-background="transparent"]) :is(.toolbar label, #voiceHint) {
-      background: var(--bg); border-radius: var(--radius);
+      background: var(--bg);
     }
+    #voiceHint { border-radius: var(--radius); }
     :root[data-background="translucent"] #stopSpeech {
       background: color-mix(in srgb, var(--control) 90%, transparent);
     }
