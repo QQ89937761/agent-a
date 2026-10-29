@@ -1700,13 +1700,16 @@ class _UITokenLogFilter(logging.Filter):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global MEMORY, _PARENT_MONITOR_TASK
-    llm_logger = logging.getLogger("backend.core.llm")
-    if not llm_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-        llm_logger.addHandler(handler)
-    llm_logger.setLevel(logging.INFO)
-    llm_logger.propagate = False
+    # Only enable dedicated diagnostics; the general Agent logger may contain
+    # tool arguments or exception details and must not be promoted to INFO.
+    for name in ("backend.core.llm", "backend.core.agent.timing"):
+        logger = logging.getLogger(name)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+            logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(name)
         if not any(isinstance(item, _UITokenLogFilter) for item in logger.filters):

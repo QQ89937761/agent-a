@@ -68,6 +68,36 @@ class DesktopRuntimeTests(unittest.IsolatedAsyncioTestCase):
         observed = observed or await self.observe()
         return await self.registry.call("desktop_execute", {"observation_id": observed["observation_id"], "actions": actions})
 
+    async def test_missing_target_returns_desktop_once_without_execution_token(self):
+        self.present = False
+        result = await self.registry.call("desktop_observe", {"window": "Any desktop app"})
+        self.assertFalse(result["ok"])
+        self.assertEqual("window_missing_or_ambiguous", result["status"])
+        self.assertTrue(result["_observation_image"])
+        self.assertNotIn("observation_id", result)
+        self.assertEqual(1, self.captures)
+        self.assertEqual(0, self.queries)
+        self.assertEqual([], self.calls)
+        result = await self.observe(include_image=False)
+        self.assertNotIn("_observation_image", result)
+        self.assertEqual(1, self.captures)
+
+    async def test_missing_target_capture_failure_has_no_token_or_side_effects(self):
+        self.registry.unregister("desktop_observe")
+        self.registry.unregister("desktop_execute")
+        capture = AsyncMock(side_effect=OSError("capture unavailable"))
+        runtime.register_tools(self.registry, resolve=lambda *_: None, inventory=lambda: [],
+                               inspect=self.inspect, capture=capture, foreground=lambda: self.active)
+        result = await self.observe()
+        self.assertEqual("window_missing_or_ambiguous", result["status"])
+        self.assertEqual("capture_failed", result["image_status"])
+        self.assertEqual("OSError", result["image_error"])
+        self.assertNotIn("observation_id", result)
+        self.assertEqual([], self.calls)
+        with patch.object(runtime, "interrupted", return_value=True):
+            self.assertEqual("interrupted", (await self.observe())["status"])
+        self.assertEqual(1, capture.await_count)
+
     async def test_plan_executes_with_one_final_observation_and_preserves_mapping(self):
         observed = await self.observe()
         result = await self.execute([self.action("press_hotkey"), self.action()], observed)

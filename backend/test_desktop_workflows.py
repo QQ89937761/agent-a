@@ -84,6 +84,21 @@ class DesktopWorkflowTests(unittest.IsolatedAsyncioTestCase):
         observed = observed or await self.observe()
         return await self.registry.call("desktop_execute", {"observation_id": observed["observation_id"], "actions": actions})
 
+    async def test_missing_app_observes_desktop_with_virtual_origin_and_no_actions(self):
+        with patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (1600, 1000), "white")) as grab:
+            result = await self.registry.call("desktop_observe", {"window": "Not running app"})
+        self.assertEqual((-100, 0, 1500, 1000), grab.call_args.kwargs["bbox"])
+        self.assertTrue(grab.call_args.kwargs["all_screens"])
+        self.assertEqual({"width": 1600, "height": 1000}, result["coordinate_mapping"]["source_size"])
+        self.assertEqual("window_missing_or_ambiguous", result["status"])
+        self.assertEqual(-100, result["coordinate_mapping"]["origin"]["x"])
+        self.assertEqual(0, result["coordinate_mapping"]["origin"]["y"])
+        self.assertTrue(result["_observation_image"])
+        self.assertEqual("evaluation.jpg", result["path"])
+        self.assertNotIn("observation_id", result)
+        self.assertEqual([], self.pg.actions)
+        self.assertEqual([], self.invocations)
+
     async def test_standard_uia_win32_electron_office_and_chat_draft_contracts(self):
         # Five UIA technology profiles, three behaviors, repeated three times.
         profiles = (("system-file", "Search", "EditControl", "search"),

@@ -1138,10 +1138,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
     async def _verify_destination(
         region: tuple[int, int, int, int], destination: str, *,
         sent_text: str | None = None, timeout: float = 5.0, attempts: int = 3,
-    ) -> tuple[bool, bytes | None, dict[str, str]]:
+    ) -> tuple[bool, dict[str, Any], dict[str, str]]:
         # Only re-observe: never submit or paste again while waiting for the UI.
         deadline = time.monotonic() + timeout
         observation = None
+        checked_images: set[tuple] = set()
+        confirmed = False
         diagnostics: dict[str, str] = {}
         for attempt in range(attempts):
             if attempt:
@@ -1150,24 +1152,46 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                     break
                 await asyncio.sleep(min(0.7, remaining))
             image = await _capture(region)
-            observation, _, _ = compress_screenshot(image)
+            observation, width, height = compress_screenshot(image)
             diagnostics.clear()
             if not observation:
                 diagnostics["verification_error"] = "observation_unavailable"
                 diagnostics["verification_reason"] = "目标窗口截图无法生成可读观察图。"
                 break
+            # A fresh capture is still required, but identical pixels cannot provide
+            # new evidence. Only reuse negative checks within this verification phase;
+            # never reuse a successful confirmation for later input or another target.
+            client = get_llm()
+            key = (id(client), getattr(getattr(client, "cfg", None), "chat_model", None),
+                   hashlib.sha256(observation).digest())
+            if key in checked_images:
+                continue
+            checked_images.add(key)
             # UI settling budget excludes vision latency; a slow gateway must
             # not consume the chance to capture the later outgoing bubble.
             started = time.monotonic()
             confirmed = await confirm_destination_in_image(
-                get_llm(), observation, destination, sent_text=sent_text, diagnostics=diagnostics,
+                client, observation, destination, sent_text=sent_text, diagnostics=diagnostics,
             )
             deadline += time.monotonic() - started
             if confirmed:
-                return True, observation, {}
+                break
             if diagnostics:
                 break  # Gateway/config errors already have their own retry policy.
-        return False, observation, diagnostics
+        payload = {}
+        if observation:
+            payload = {
+                "_observation_image": base64.b64encode(observation).decode("ascii"),
+                "observation_size": {"width": width, "height": height},
+            }
+            try:
+                payload["path"] = save_screenshot_file(observation)
+                payload = remember_screenshot(payload, image, *region[:2])
+            except OSError:
+                # An already submitted/verified message must not become a failed
+                # send just because persisting its observation ran out of space.
+                payload["observation_error"] = "观察图保存失败；当前图仅供核对，不用它猜坐标；需要点击时重新获取截图。"
+        return confirmed, payload, diagnostics
 
     @registry.tool(
         name="screen_capture",
@@ -1813,8 +1837,8 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                     except Exception as e:
                         return {"ok": False, "status": "window_unavailable", "sent": False, "error": str(e)[:300]}
                     # Detached/current chats may have no selectable contact item at all.
-                    confirmed, _, diagnostics = await _verify_destination(region, destination, attempts=1)
-                    selected = {"ok": confirmed, "status": "destination_not_confirmed", **diagnostics}
+                    confirmed, observation, diagnostics = await _verify_destination(region, destination, attempts=1)
+                    selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics}
                     if not confirmed and not diagnostics:
                         coords = await _locate_in_region(
                             region, f"唯一匹配的会话/联系人 {json.dumps(destination, ensure_ascii=False)}；有多个同名候选或看不清时返回未找到",
@@ -1823,15 +1847,20 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                             return {**coords, "sent": False, "verified": False}
                         if await system_control.wait_for_user_idle(1.5, 8.0):
                             await system_control.run_controlled(control, pyautogui.click, *coords)
-                            confirmed, _, diagnostics = await _verify_destination(region, destination, timeout=verify_timeout)
-                            selected = {"ok": confirmed, "status": "destination_not_confirmed", **diagnostics}
+                            confirmed, observation, diagnostics = await _verify_destination(region, destination, timeout=verify_timeout)
+                            selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics}
                 if not selected.get("ok"):
                     _RECENT_SENDS.pop(fingerprint, None)
                     return {
                         "ok": False,
                         "status": selected.get("status", "destination_not_confirmed"),
                         "control_mode": selection_mode,
-                        **{key: value for key, value in selected.items() if key.startswith("verification_")},
+                        **{key: value for key, value in selected.items() if key.startswith("verification_") or key in {
+                            "_observation_image", "path", "observation_size", "coordinate_mapping", "coordinate_note", "observation_error",
+                        }},
+                        "retryable": True,
+                        "requires_reinspect": True,
+                        "next": "先核对返回的当前画面和会话标题，定位唯一目标后再发送；不要在画面未变时原样重试，不要绕过目标确认。",
                         "sent": False,
                         "verified": False,
                         "duplicate_suppressed": False,
@@ -1964,7 +1993,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 "screen_changed": changed,
                 "change_ratio": ratio,
                 **diagnostics,
-                "_observation_image": base64.b64encode(observation).decode("ascii") if observation else "",
+                **observation,
                 "duplicate_suppressed": False,
                 "semantic_input": semantic_input,
                 "window": focus_result["window"],
@@ -2083,6 +2112,11 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                                       include_offscreen=False, query_timeout=3.0, **options)
 
     async def desktop_capture(info):
+        if info is None:
+            left, top, right, bottom = await _screen_bounds()
+            image = await _capture((left, top, right - left, bottom - top))
+            result = await asyncio.to_thread(screenshot_result, image, "当前桌面观察（尚未确认目标窗口）", "auto")
+            return remember_screenshot(result, image, left, top)
         rect = info["rect"]
         left, top, right, bottom = await _screen_bounds()
         x, y = max(left, rect["x"]), max(top, rect["y"])

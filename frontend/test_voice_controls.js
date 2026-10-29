@@ -78,7 +78,7 @@ const tick = () => new Promise(setImmediate);
     stopCloudWake() {wakeStopped++;},
     cancelRecording: async () => {cancelled++;},
   });
-  const change = section("    wakeToggle.onchange = async () =>", "    connect();");
+  const change = section("    wakeToggle.onchange = async () =>", "    startNewConversationDraft();");
   vm.runInContext(change, off.ctx);
   await off.ctx.wakeToggle.onchange();
   assert.equal(wakeStopped, 1); assert.equal(cancelled, 1);

@@ -60,7 +60,24 @@ const old = {id: "default", title: "旧任务"};
 function listing(items, current = "default") {
   context.handleConversationControl({type: "conversation_list", data: {conversations: items, current_id: current}});
 }
+let startupConnections = 0;
+context.connect = () => {
+  startupConnections++;
+  assert.equal(value("currentConversationId"), value("draftConversationId"), "select the new chat before connecting");
+  assert.notEqual(value("draftConversationId"), "");
+};
+const startup = html.slice(html.lastIndexOf("\n    startNewConversationDraft();"), html.lastIndexOf("  </script>"));
+vm.runInContext(startup, context);
+assert.equal(startupConnections, 1, "exercise the actual page startup, not a manual new-chat click");
+const startupDraft = value("currentConversationId");
+assert.equal(value("draftConversationId"), startupDraft, "app startup starts on an unsaved new chat");
+assert.equal(value("historyLoaded"), true, "the new chat is initially blank");
+assert.equal(value("conversationStore.size"), 0, "startup does not create a saved empty conversation");
 listing([old]);
+assert.equal(value("conversationStore.size"), 1, "startup keeps existing conversations available");
+assert.equal(value("currentConversationId"), startupDraft, "initial server selection does not switch back to an old chat");
+listing([old]);
+assert.equal(value("currentConversationId"), startupDraft, "reconnection does not create or select another chat");
 for (let i = 0; i < 5; i++) context.newConversationButton.onclick();
 const draft = value("currentConversationId");
 assert.equal(messages.length, 0, "new must not send a create command");

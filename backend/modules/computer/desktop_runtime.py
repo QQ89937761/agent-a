@@ -118,8 +118,19 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
         timings["windows_ms"] = round((time.perf_counter() - start) * 1000)
         target = await asyncio.to_thread(resolve, window, handle)
         if target is None:
-            return {"ok": False, "status": "window_missing_or_ambiguous", "windows": windows,
-                    "next": "请选择唯一主窗口句柄；窗口标题相同不代表同一窗口，不要重复启动应用。", "timings": timings}
+            result = {"ok": False, "status": "window_missing_or_ambiguous", "windows": windows,
+                      "next": "结合窗口清单和当前桌面定位目标；可能隐藏在托盘或存在同名窗口，不要重复启动、关闭或猜选主窗口。", "timings": timings}
+            if include_image and not interrupted():
+                start = time.perf_counter()
+                try:
+                    result.update(await capture(None))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    result["image_status"] = "capture_failed"
+                    result["image_error"] = type(exc).__name__
+                timings["capture_ms"] = round((time.perf_counter() - start) * 1000)
+            return result
         info = await asyncio.to_thread(identity, target)
         start = time.perf_counter()
         tree = await inspect(info["handle"]) if include_controls else {"controls": [], "status": "not_requested"}
@@ -159,7 +170,7 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
 
     @registry.tool(name="desktop_observe", description=(
         "通用桌面观察：一次获取窗口身份、紧凑控件摘要和局部截图，避免重复list_windows/截图。"
-        "window或handle指定唯一窗口，不激活它；相同标题不猜。返回observation_id、uia/visual路径和分项耗时。"
+        "window或handle指定唯一窗口，不激活它；相同标题不猜。找不到唯一窗口时同时返回全窗口清单和桌面图，不发执行凭证。返回observation_id、uia/visual路径和分项耗时。"
         "优先已有文档/网页接口；控件不足用单步视觉工具，不反复读空树。"), parameters={
             "type": "object", "properties": {"window": {"type": "string"}, "handle": {"type": "integer"},
             "include_image": {"type": "boolean"}, "include_controls": {"type": "boolean"}}})

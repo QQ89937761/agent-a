@@ -1731,19 +1731,20 @@
       if (!conversationPanel.hidden) sendConversationCommand("conversation_list");
     };
     closeConversationButton.onclick = closeConversationPanel;
-    newConversationButton.onclick = () => {
+    function startNewConversationDraft() {
       closeConversationPanel();
-      // 只创建本地草稿；首条有效消息发送时才由服务端保存对话。
+      // Keep empty drafts local; save them only when the first valid message is sent.
       rememberConversationModel();
       currentConversationId = draftConversationId = `conv_${newClientId()}`;
       restoreConversationModel();
-      historyLoaded = true; // 草稿已是空白，重连历史不能擦掉刚发送的消息。
+      historyLoaded = true; // Ignore stale history while this blank draft is selected.
       if (typeof resetTaskTraces === "function") resetTaskTraces();
       log.innerHTML = "";
       setBusy(false);
       statusEl.textContent = "";
       renderConversationList(Array.from(conversationStore.values()));
-    };
+    }
+    newConversationButton.onclick = startNewConversationDraft;
     document.addEventListener("click", (event) => {
       if (conversationPanel.hidden || conversationPanel.contains(event.target) || conversationButton.contains(event.target)) return;
       closeConversationPanel();
@@ -4182,6 +4183,7 @@
       }
     };
 
+    startNewConversationDraft();
     connect();
   </script>
 </body>

@@ -64,7 +64,11 @@ class VisualContractTests(unittest.IsolatedAsyncioTestCase):
         llm = InspectLLM("click_element")
         with tempfile.TemporaryDirectory() as directory:
             agent = Agent(llm, registry, AgentConfig(), result_dir=Path(directory))
-            events = [event async for event in agent.run("点击目标控件", approval_mode="full")]
+            with self.assertLogs("backend.core.agent.timing", level="INFO") as timing:
+                events = [event async for event in agent.run("点击目标控件", approval_mode="full")]
+        self.assertIn("name=click_element ok=False elapsed_ms=", str(timing.output))
+        self.assertNotIn("点击目标控件", str(timing.output))
+        self.assertNotIn("failure.jpg", str(timing.output))
         metadata = json.loads(next(m["content"] for m in llm.seen if m.get("role") == "tool"))
         self.assertEqual(result["coordinate_mapping"], metadata["coordinate_mapping"])
         self.assertNotIn("_observation_image", metadata)

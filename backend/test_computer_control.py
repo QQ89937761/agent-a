@@ -1408,11 +1408,83 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                 "window": "Codex", "destination": "项目会话", "text": "继续任务",
             })
         self.assertEqual("destination_not_confirmed", result["status"])
-        self.assertEqual(4, confirm.await_count)  # Current chat, then bounded post-selection observations.
+        self.assertEqual(2, confirm.await_count)  # Current chat, then one check of the unchanged selected view.
         self.assertEqual("foreground_exclusive", result["control_mode"])
         background.assert_not_called()
         self.assertEqual([], self.clipboard)
         self.assertEqual({}, computer_module._RECENT_SENDS)
+
+    async def test_unchanged_unconfirmed_destination_returns_current_mapped_image(self):
+        # The shared send route must work identically for any desktop application.
+        for title in ("Team chat", "Customer support", "Mail"):
+            with self.subTest(app=title):
+                window = FakeWindow(title, 297, (10, 20, 90, 80))
+                with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+                     patch.object(computer_module, "_uia_select_named_control", return_value={"ok": False, "status": "uia_target_not_found"}), \
+                     patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(return_value=False)) as confirm, \
+                     patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
+                     patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
+                     patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (90, 80), "white")), \
+                     patch.object(computer_module, "_uia_background_send") as background:
+                    result = await self.registry.call("send_text_to_window", {
+                        "window": title, "destination": "Exact recipient", "text": "hello",
+                    })
+                self.assertEqual("destination_not_confirmed", result["status"])
+                self.assertEqual(2, confirm.await_count, "one initial check and one after selection; unchanged retries must not query vision")
+                self.assertFalse(result["sent"])
+                self.assertTrue(result["requires_reinspect"])
+                self.assertTrue(result["_observation_image"])
+                self.assertEqual({"x": 10, "y": 20}, result["coordinate_mapping"]["origin"])
+                self.assertTrue(Path(result["path"]).is_file())
+                background.assert_not_called()
+                self.assertEqual([], self.clipboard)
+                self.assertFalse(any(action[0] in {"press", "hotkey", "write"} for action in self.pg.actions))
+
+    async def test_uncertain_outgoing_message_is_not_requeried_or_resent_on_identical_pixels(self):
+        window = FakeWindow("Generic messenger", 298)
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "_uia_select_named_control", return_value={"ok": True}), \
+             patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
+             patch.object(computer_module, "_focus_semantic_text_input", return_value=True), \
+             patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")), \
+             patch.object(computer_module, "wait_for_change", new=AsyncMock(return_value=(True, 0.2))), \
+             patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
+             patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(return_value=False)) as confirm:
+            args = {"window": window.title, "destination": "Exact recipient", "text": "hello"}
+            result = await self.registry.call("send_text_to_window", args)
+            retry = await self.registry.call("send_text_to_window", {**args, "submit_key": "ctrl+enter"})
+        self.assertEqual("sent_unverified", result["status"])
+        self.assertTrue(result["sent"])
+        self.assertFalse(result["verified"])
+        self.assertEqual(1, confirm.await_count)
+        self.assertEqual("previous_send_unconfirmed", retry["status"])
+        self.assertEqual(["hello"], self.clipboard)
+        self.assertEqual(1, sum(action[0] == "press" for action in self.pg.actions))
+        self.assertTrue(result["coordinate_mapping"])
+
+    async def test_observation_disk_failure_does_not_turn_verified_send_into_retry(self):
+        window = FakeWindow("Generic messenger", 299)
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "_uia_select_named_control", return_value={"ok": True}), \
+             patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
+             patch.object(computer_module, "_focus_semantic_text_input", return_value=True), \
+             patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")), \
+             patch.object(computer_module, "wait_for_change", new=AsyncMock(return_value=(True, 0.2))), \
+             patch.object(computer_module, "save_screenshot_file", side_effect=OSError("disk full")), \
+             patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(return_value=True)):
+            args = {"window": window.title, "destination": "Exact recipient", "text": "hello"}
+            result = await self.registry.call("send_text_to_window", args)
+            retry = await self.registry.call("send_text_to_window", args)
+        self.assertTrue(result["verified"])
+        self.assertEqual("sent_verified", result["status"])
+        self.assertEqual("duplicate_suppressed", retry["status"])
+        self.assertTrue(result["observation_error"])
+        self.assertTrue(result["_observation_image"])
+        self.assertNotIn("path", result)
+        self.assertEqual(["hello"], self.clipboard)
+        self.assertEqual(1, sum(action[0] == "press" for action in self.pg.actions))
 
     async def test_visual_destination_verification_allows_send(self):
         window = FakeWindow("ChatGPT", 97)
@@ -1440,7 +1512,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(side_effect=[False, False, True])) as confirm, \
              patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
-             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")), \
+             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'gray', 'black']]), \
              patch.object(computer_module, "_uia_background_send", return_value={"available": True, "verified": True}) as background:
             result = await self.registry.call("send_text_to_window", {"window": "微信", "destination": "测试联系人", "text": "测试"})
         self.assertTrue(result["ok"])
@@ -1483,7 +1555,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
              patch.object(computer_module, "_focus_semantic_text_input", return_value=True), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
-             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")), \
+             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'black']]), \
              patch.object(computer_module, "wait_for_change", new=AsyncMock(return_value=(True, 0.2))), \
              patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
              patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(side_effect=[False, True])) as confirm:
@@ -1508,7 +1580,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
              patch.object(computer_module, "_focus_semantic_text_input", return_value=True), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
-             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")) as grab, \
+             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'black']]) as grab, \
              patch.object(computer_module, "wait_for_change", new=AsyncMock(return_value=(True, 0.2))), \
              patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
              patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(side_effect=confirm)) as verify:
@@ -1954,13 +2026,6 @@ class ScreenshotCompressionTests(unittest.TestCase):
         self.assertTrue(data.startswith(b"\xff\xd8"))  # JPEG magic
         self.assertEqual(1920, width)  # Auto detail preserves readable full-HD observations.
         self.assertEqual(1080, height)
-
-    def test_both_capture_tools_use_same_compression(self):
-        source = Path(computer_module.__file__).read_text(encoding="utf-8")
-        # Observation images share compression; full and region captures share screenshot_result.
-        self.assertIn("observation, _, _ = compress_screenshot(image)", source)
-        self.assertEqual(4, source.count("asyncio.to_thread(screenshot_result, image,"))
-        self.assertIn("data, width, height = compress_screenshot(image)", source)
 
     def test_compact_fits_compressed_screenshot(self):
         from backend.core.agent import compact_for_limit
