@@ -35,6 +35,13 @@ assert.match(render(String.raw`\[\frac{1}{2}\]`), /<mfrac>/);
 assert.match(render(String.raw`$$\begin{matrix}a&b\\c&d\end{matrix}$$`), /<mtable\b/);
 assert.match(render(String.raw`**面积 $4\text{m}^2$**`), /<b>面积 <span class="chat-math">/);
 assert.match(render('| 面积 | 数量 |\n|---|---|\n| $x^2$ | 1 |'), /<td[^>]*><span class="chat-math">/);
+const variableHeaders = '| 单击夯击能 $(E)$ | 粗颗粒土深度 $(H)$ | 细颗粒土深度 $(H)$ |\n|---|---|---|\n| 1000 kN·m | 5.0～6.0 m | 4.0～5.0 m |';
+const renderedHeaders = render(variableHeaders);
+assert.equal((renderedHeaders.match(/<th[^>]*>[^<]*<span class="chat-math">/g) || []).length, 3);
+assert.doesNotMatch(renderedHeaders, /\$/);
+assert.equal(live(variableHeaders), renderedHeaders);
+assert.match(render('推荐单击夯能 **$(E)$**'), /<b><span class="chat-math">/);
+
 const htmlBreakTable = render('| A | B |\n|---|---|\n| first<br>second | value |');
 assert.match(htmlBreakTable, /<td[^>]*>first<br>second<\/td>/);
 assert.doesNotMatch(htmlBreakTable, /&lt;br/);

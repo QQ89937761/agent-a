@@ -412,6 +412,13 @@ const englishRelease1049Notes = [
   "Before upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.",
   ""
 ].join("\n");
+const release1051Notes = "## 小A 1.0.51\n\n- 修复语音停止按钮在标准、半透明和透明背景下的显示，增强轮廓并放大停止图标。\n- 麦克风改用清晰的线框图标，保持不同背景下的显示一致。\n- 修复聊天表头中 `(E)`、`(H)` 等公式残留 `$` 的问题。\n- 微信、飞书共用消息格式转换，改善常见公式、标题和手机端表格的可读性；代码、路径、金额和暂不支持的公式保留原文。\n- 云端渠道需更新云端小A后生效；已有聊天消息不会被改写。\n\n升级前请正常退出小A，保留同目录完整 `XiaoA-data` 文件夹。禁止商业使用，许可见仓库 LICENSE。\n";
+const englishRelease1051Notes = "## XiaoA 1.0.51\n\n- Fixed the speech stop button across standard, translucent and transparent backgrounds, with a clearer border and larger stop icon.\n- Replaced the microphone symbol with a clear outline icon that stays consistent across background modes.\n- Fixed stray `$` delimiters around formulas such as `(E)` and `(H)` in chat table headers.\n- WeChat and Feishu now share message formatting for more readable common formulas, headings and mobile tables; code, paths, monetary amounts and unsupported formulas keep their original content.\n- Cloud channels require an update to the cloud XiaoA backend; existing chat messages are not rewritten.\n\nBefore upgrading, exit XiaoA normally and keep the entire `XiaoA-data` folder beside the EXE. Commercial use is prohibited; see LICENSE in the repository.\n";
+for (const newline of ["\n", "\r\n"]) {
+  const source = release1051Notes.replace(/\n/g, newline);
+  assert.equal(translate(source, "en"), englishRelease1051Notes.replace(/\n/g, newline));
+  assert.equal(translate(source, "zh"), source);
+}
 const release1050Notes = [
   "## 小A 1.0.50",
   "",

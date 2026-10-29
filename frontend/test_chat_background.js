@@ -222,6 +222,11 @@ assert(preload.includes('ipcRenderer.removeListener("chat-background", handler)'
 assert(!html.includes("acrylic"), "removed background must not remain in renderer/CSS");
 assert(html.includes('background: var(--window-bg)'));
 assert(html.includes(':is(.toolbar label, #voiceHint)'), 'voice controls keep their background cards');
+assert(html.includes(':root[data-background="translucent"] #stopSpeech'), 'stop playback follows translucent background styling');
+assert(html.includes('#stopSpeech, .capsule'), 'stop playback follows transparent control surface styling');
+assert(html.includes('#stopSpeech:hover)'), 'stop playback follows transparent hover styling');
+assert(html.includes('#stopSpeech svg { width: 18px; height: 18px; }'), 'stop playback icon is large enough');
+assert(html.includes('<path d="M5 5h14v14H5z" fill="currentColor" />'), 'stop playback icon uses a visible square');
 const stepRules = [...html.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector]) => /\.step(?![\w-])/.test(selector));
 assert(stepRules.length > 0, 'tool step styles must still exist');
 for (const [, selector, declarations] of stepRules) {

@@ -19,6 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from backend.core.cloud_identity import write_private_text
+from backend.modules.chat.message_format import format_channel_text
 
 API_ROOT = "https://ilinkai.weixin.qq.com"
 CDN_ROOT = "https://novac2c.cdn.weixin.qq.com/c2c"
@@ -675,7 +676,7 @@ async def send_message(user_id: str, text: str, context_token: str, account_id: 
         "msg": {"to_user_id": user_id, "client_id": uuid.uuid4().hex,
                 "message_type": 2, "message_state": 2,
                 "context_token": context_token,
-                "item_list": [{"type": 1, "text_item": {"text": text}}]},
+                "item_list": [{"type": 1, "text_item": {"text": format_channel_text(text)}}]},
     }, **({"account_id": account_id} if account_id else {}))
 
 

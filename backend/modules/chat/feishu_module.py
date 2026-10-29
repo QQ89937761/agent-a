@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from backend.core.config import Config, app_home
+from backend.modules.chat.message_format import format_channel_text
 
 _client = None
 _ws_thread = None
@@ -221,7 +222,7 @@ async def send_message(chat_id: str, text: str, *, receive_id_type: str = "chat_
             CreateMessageRequestBody.builder()
             .receive_id(chat_id)
             .msg_type("text")
-            .content(json.dumps({"text": text}))
+            .content(json.dumps({"text": format_channel_text(text)}))
             .build()
         ).build()
     # lark-oapi 的同步调用放线程里执行,避免阻塞事件循环
