@@ -1334,13 +1334,48 @@ assert.match(settingsHtml, /tencentCredentialClearSaved/);
   assert.equal(both.calls.at(-1).body.clear_baidu_credentials, true);
   console.log('speech credential deletion: confirmation, cancellation, isolation, persistence, cloud retry and environment guards passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+// The preview draft is a local UI preference and survives a settings renderer restart.
+{
+  const vm = require('node:vm');
+  const key = 'xiaoa.voicePreviewText';
+  const values = new Map();
+  const storage = {
+    getItem: name => values.has(name) ? values.get(name) : null,
+    setItem: (name, value) => values.set(name, String(value)),
+  };
+  function createContext(initialText, localStorage = storage) {
+    const field = {value: initialText, addEventListener(type, callback) {
+      this.listeners ||= {}; this.listeners[type] = callback;
+    }};
+    const context = vm.createContext({$: id => id === 'voice_preview_text' ? field : null, localStorage});
+    const start = settingsHtml.indexOf('    const VOICE_PREVIEW_TEXT_KEY');
+    const end = settingsHtml.indexOf('    function fillModelPicker', start);
+    assert(start >= 0 && end > start, 'voice preview text persistence hook exists');
+    vm.runInContext(settingsHtml.slice(start, end), context);
+    return field;
+  }
+  const first = createContext('默认试听文本');
+  assert.equal(first.value, '默认试听文本', 'keep the shipped default on first launch');
+  first.value = '用户编辑的中英混读试听内容';
+  first.listeners.input();
+  assert.equal(values.get(key), '用户编辑的中英混读试听内容');
+  const restarted = createContext('默认试听文本');
+  assert.equal(restarted.value, '用户编辑的中英混读试听内容', 'restore custom text after restart');
+  restarted.value = '';
+  restarted.listeners.input();
+  assert.equal(createContext('默认试听文本').value, '', 'an intentionally cleared preview stays cleared');
+  const blockedStorage = {getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }};
+  const privateMode = createContext('still usable', blockedStorage);
+  assert.doesNotThrow(() => privateMode.listeners.input(), 'storage restrictions must not break settings');
+  console.log('voice preview draft persistence passed');
+}
 // The preview sends user text verbatim (URL-encoded), using the selected provider/voice.
 (async () => {
   const vm = require('node:vm');
   const fields = new Proxy({}, {get: (target, id) => target[id] ||= {value: '', focus() { this.focused = true; }}});
   const calls = []; let playbackCount = 0;
   const context = vm.createContext({$: id => fields[id], API: '', voiceCfg: {provider: 'baidu', tts_enabled: true},
-    previewAudio: null, URL: {createObjectURL: () => 'blob:preview'},
+    previewAudio: null, persistVoicePreviewText: () => {}, URL: {createObjectURL: () => 'blob:preview'},
     Audio: function () { this.play = async () => { playbackCount++; }; this.pause = () => {}; },
     fetch: async url => { calls.push(url); return {ok: true, blob: async () => ({type: 'audio/mpeg'})}; },
   });

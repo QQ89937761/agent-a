@@ -9,13 +9,17 @@ from unittest.mock import AsyncMock
 from PIL import Image
 from backend.core.llm import LLMClient
 from backend.core.config import AgentConfig, LLMConfig
-from backend.core.agent import Agent
+from backend.core.agent import Agent, SYSTEM_PROMPT
 from backend.core.tools import Tool, ToolRegistry
 from backend.test_conversation_approval import OneCallLLM
 from backend.modules.computer.computer_module import locate_in_image, parse_coords
 
 
 class VisualContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_desktop_guidance_does_not_treat_windows_taskbar_as_target_app(self):
+        self.assertIn("Shell_TrayWnd是Windows任务栏，不是目标应用窗口", SYSTEM_PROMPT)
+        self.assertIn("结合返回的全窗口清单和桌面图定位托盘/主窗口", SYSTEM_PROMPT)
+
     async def test_pixels_and_explicit_normalized_units_without_guessing_or_clamping(self):
         for answer, expected, invalid in (
             ('{"x":690,"y":850}', None, True),

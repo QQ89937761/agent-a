@@ -1875,6 +1875,16 @@
       try { localStorage.setItem(REASONING_EFFORT_KEY, value); } catch (_) {}
     }
 
+    const VOICE_PREVIEW_TEXT_KEY = "xiaoa.voicePreviewText";
+    function persistVoicePreviewText() {
+      try { localStorage.setItem(VOICE_PREVIEW_TEXT_KEY, $("voice_preview_text").value); } catch (_) {}
+    }
+    try {
+      const savedPreviewText = localStorage.getItem(VOICE_PREVIEW_TEXT_KEY);
+      if (savedPreviewText !== null) $("voice_preview_text").value = savedPreviewText;
+    } catch (_) {}
+    $("voice_preview_text").addEventListener("input", persistVoicePreviewText);
+
     function fillModelPicker(picker, models) {
       const options = Array.isArray(models) ? models.filter(Boolean) : [];
       picker.innerHTML = "";
@@ -3252,6 +3262,7 @@
     $("preview_voice").onclick = async () => {
       const button = $("preview_voice");
       const status = $("voice_preview_status");
+      persistVoicePreviewText();
       const provider = $("speech_provider").value;
       if (!voiceCfg || voiceCfg.provider !== provider || !voiceCfg.tts_enabled) {
         status.textContent = "请先保存所选语音服务商和密钥，再试听";
