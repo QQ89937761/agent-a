@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -8,10 +9,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.api import server
+from backend.core.tools import ToolRegistry
 from backend.modules.chat import feishu_module, weixin_clawbot
 
 
 class WeixinMultiAccountTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Listener initialization must not leak account state into later channel tests.
+        self.enterContext(patch.multiple(weixin_clawbot, _CONFIG={}, _STATE_PATH=None,
+                                        _CALLBACK=None, _ACCOUNTS_CHANGED=None,
+                                        _SEEN={}, _ACCOUNT_SEEN={}, _LOGINS={}))
+
     async def test_login_sessions_are_independent_and_add_accounts(self):
         qr = MagicMock()
         qr.raise_for_status.return_value = None
@@ -87,6 +95,40 @@ class ChannelIsolationTests(unittest.TestCase):
             self.assertEqual((False, 0), server._channel_permission("weixin", "account-a"))
             account_permission.assert_called_once_with("weixin", "account-a", "")
 
+    def test_remote_control_revocation_stays_in_its_channel_and_identity(self):
+        for source, other in (("weixin", "feishu"), ("feishu", "weixin")):
+            for identity in ("", "shared-id"):
+                with self.subTest(source=source, identity=identity):
+                    key = (source, "chat")  # Legacy keys also rely on channel_identity.
+                    other_key = (other, "other-chat")
+                    selected = {"remote_control": True, "channel_identity": "shared-id"}
+                    other_task = {"remote_control": True, "channel_identity": "shared-id"}
+                    different_identity = {"remote_control": True, "channel_identity": "other-id"}
+                    chat_only = {"remote_control": False, "channel_identity": "shared-id"}
+                    own_pending, other_pending = MagicMock(), MagicMock()
+                    own_pending.done.return_value = other_pending.done.return_value = False
+                    with patch.dict(server.CHANNEL_ACTIVE_TASKS, {
+                        key: selected, other_key: other_task,
+                        (source, "different-chat"): different_identity,
+                        (source, "chat-only"): chat_only,
+                    }, clear=True), patch.dict(server.CHANNEL_CONFIRM, {
+                        key: own_pending, other_key: other_pending,
+                    }, clear=True), patch.dict(server.CHANNEL_RESUME, {
+                        other_key: ["preserved"],
+                    }, clear=True):
+                        server._stop_channel_control(source, identity)
+                        self.assertTrue(selected["stop"])
+                        self.assertTrue(selected["control_revoked"])
+                        self.assertNotIn("stop", other_task)
+                        self.assertNotIn("stop", chat_only)
+                        if identity:
+                            self.assertNotIn("stop", different_identity)
+                        else:
+                            self.assertTrue(different_identity["stop"])
+                        own_pending.set_result.assert_called_once_with(False)
+                        other_pending.set_result.assert_not_called()
+                        self.assertEqual(["preserved"], server.CHANNEL_RESUME[other_key])
+
     def test_stopping_one_feishu_identity_does_not_stop_another(self):
         previous = dict(server.CHANNEL_ACTIVE_TASKS)
         try:
@@ -105,6 +147,56 @@ class ChannelIsolationTests(unittest.TestCase):
         finally:
             server.CHANNEL_ACTIVE_TASKS.clear()
             server.CHANNEL_ACTIVE_TASKS.update(previous)
+
+
+class ChannelStopIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_other_channel_revocation_does_not_abort_a_real_agent_response(self):
+        class WaitingLLM:
+            def __init__(self):
+                self.started = asyncio.Event()
+                self.finish = asyncio.Event()
+
+            async def chat_stream_tools(self, *_args, **_kwargs):
+                self.started.set()
+                await self.finish.wait()
+                yield "done", {"role": "assistant", "content": "Query completed"}
+
+        for source, other in (("weixin", "feishu"), ("feishu", "weixin")):
+            for identity in ("", "shared-id"):
+                with self.subTest(source=source, identity=identity):
+                    llm = WaitingLLM()
+                    sent = AsyncMock()
+                    with patch.dict(server.CHANNEL_ACTIVE_TASKS, {}, clear=True), \
+                         patch.dict(server.CHANNEL_CONFIRM, {}, clear=True), \
+                         patch.dict(server.CHANNEL_RESUME, {}, clear=True), \
+                         patch.dict(server.CHANNEL_HISTORY, {}, clear=True), \
+                         patch.dict(server.CHANNEL_LOCKS, {}, clear=True), \
+                         patch.dict(server.CHANNEL_LOCKED, {"locked": False}, clear=True), \
+                         patch.object(server, "LLM", llm), \
+                         patch.object(server, "REGISTRY", ToolRegistry()), \
+                         patch.object(server, "_channel_identity", return_value="shared-id"), \
+                         patch.object(server, "_channel_permission", return_value=(True, 0)), \
+                         patch.object(server, "_prepare_shared_context", new=AsyncMock(return_value="Run a query")), \
+                         patch.object(server, "_memory_for_current_channel", return_value=None), \
+                         patch.object(server, "_active_skill_prompt", return_value=""), \
+                         patch.object(server, "_AuditTrace", return_value=SimpleNamespace(consume=lambda event: None)), \
+                         patch.object(server, "_channel_send", new=sent):
+                        task = asyncio.create_task(server.handle_channel_command(source, "stop-isolation-test", "Run a query"))
+                        try:
+                            await asyncio.wait_for(llm.started.wait(), 2)
+                            server._stop_channel_control(other, identity)
+                            await asyncio.sleep(.15)  # Real Agent polls its abort callback during streaming.
+                            self.assertFalse(next(iter(server.CHANNEL_ACTIVE_TASKS.values()))["stop"])
+                            self.assertFalse(task.done())
+                            llm.finish.set()
+                            await asyncio.wait_for(task, 2)
+                            self.assertEqual(["Query completed"], [call.args[2] for call in sent.await_args_list])
+                            self.assertFalse(server.CHANNEL_RESUME)
+                        finally:
+                            llm.finish.set()
+                            if not task.done():
+                                task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
 
 
 class FeishuPendingUsersTests(unittest.TestCase):

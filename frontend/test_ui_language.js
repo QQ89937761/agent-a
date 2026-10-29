@@ -111,6 +111,8 @@ assert.match(toolDescription({name:"cad_erase_entities",danger:true}), /High-ris
 assert.match(toolDescription({name:"excel_write_cells",side_effect:true}), /Changes system state/);
 assert.equal(toolDescription({name:"custom_user_tool"}), "");
 for (const [name, expected] of [
+  ["desktop_observe", "Observe a unique desktop window without activating it"],
+  ["desktop_execute", "Execute 1 to 5 known short desktop steps"],
   ["pdf_read_text", "Read PDF text page by page"],
   ["pdf_list_pages", "Check that a PDF exists"],
   ["pdf_extract_images", "Extract embedded images from a PDF"],
@@ -132,6 +134,15 @@ for (const [name, expected] of [
 const officeSource = fs.readFileSync("../backend/modules/office/office_module.py", "utf8");
 for (const [, name] of officeSource.matchAll(/@registry\.tool\(\s*name\s*=\s*"([^"]+)"/g)) {
   assert(toolDescription({name}), `Missing Office/PDF English description: ${name}`);
+}
+// Cover shared desktop tools too, so newly registered tools cannot silently remain Chinese.
+for (const file of ["computer_module.py", "desktop_runtime.py"]) {
+  const source = fs.readFileSync(`../backend/modules/computer/${file}`, "utf8");
+  for (const [, name] of source.matchAll(/@registry\.tool\(\s*name\s*=\s*"([^"]+)"/g)) {
+    const description = toolDescription({name});
+    assert(description, `Missing desktop English description: ${name}`);
+    assert(!/[\u3400-\u9fff]/.test(description), `Chinese text remains in ${name}`);
+  }
 }
 // Minimal DOM: exercise real observer/persistence without adding a dependency.
 function element(tag = "DIV", attrs = {}, parent = null) {
@@ -239,7 +250,7 @@ console.log("Cloud language: progress templates, reversible empty state and verb
 // Tool descriptions inserted after load must switch both ways without changing tool IDs.
 {
   const body = element();
-  const descriptions = ["pdf_read_text", "pdf_list_pages", "pdf_extract_images", "pdf_render_pages",
+  const descriptions = ["desktop_observe", "desktop_execute", "pdf_read_text", "pdf_list_pages", "pdf_extract_images", "pdf_render_pages",
     "word_list_paragraphs", "word_apply_replacements", "word_append_paragraphs", "word_insert_paragraphs", "word_append_blocks"];
   const app = runtime("en", false, body);
   for (const name of descriptions) {

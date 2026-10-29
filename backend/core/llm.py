@@ -910,9 +910,11 @@ class LLMClient:
         image_bytes: bytes,
         *,
         model: str | None = None,
-        image_format: str = "png",
+        image_format: str | None = None,
     ) -> str:
         """给一张图 + 一段指令,返回文本。用于电脑操作模块理解屏幕。"""
+        if image_format is None:
+            image_format = "jpeg" if image_bytes.startswith(b"\xff\xd8\xff") else "png"
         b64 = base64.b64encode(image_bytes).decode()
         messages = [
             {
@@ -926,8 +928,13 @@ class LLMClient:
                 ],
             }
         ]
-        msg = await self.chat(messages, model=model or self.cfg.chat_model)
-        return msg.get("content", "") or ""
+        started = time.perf_counter()
+        try:
+            msg = await self.chat(messages, model=model or self.cfg.chat_model)
+            return msg.get("content", "") or ""
+        finally:
+            _LOGGER.info("Vision request elapsed_ms=%d image_format=%s image_bytes=%d",
+                         round((time.perf_counter() - started) * 1000), image_format, len(image_bytes))
 
     # ---------- 嵌入(给记忆层用) ----------
     async def embed(self, texts: Iterable[str], *, model: str | None = None) -> list[list[float]]:

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from typing import get_type_hints
 
 from PIL import Image, ImageGrab
@@ -1587,8 +1587,10 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "_uia_click_named_control", return_value={"ok": False, "status": "uia_control_not_found"}), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
              patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")):
-            with self.assertRaises(ValueError):
-                await self.registry.call("click_element", {"target_desc": "打开", "handle": 94})
+            result = await self.registry.call("click_element", {"target_desc": "打开", "handle": 94})
+        self.assertEqual("visual_coordinate_invalid", result["status"])
+        self.assertIn("_observation_image", result)
+        self.assertEqual({"width": 100, "height": 80}, result["coordinate_mapping"]["observation_size"])
         self.assertEqual([], self.pg.actions)
 
     async def test_changed_screen_without_sent_message_does_not_verify_or_repeat(self):
@@ -1649,6 +1651,103 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["drafted"])
         self.assertEqual("previous_send_unconfirmed", retry["status"])
         self.assertEqual(["继续任务"], self.clipboard)
+        self.assertFalse(any(action[0] in {"click", "press"} for action in self.pg.actions))
+
+    async def test_visual_failure_is_shared_across_click_send_and_hotkey_without_repeat(self):
+        # Any application's title uses the same visual locator and error recovery.
+        window = FakeWindow("Generic desktop app", 96, (100, 80, 957, 782))
+        self.current_llm = FakeLLM((690, 850))
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "screen_bounds", return_value=(0, 0, 1920, 1080)), \
+             patch.object(computer_module, "_uia_select_named_control", return_value={"ok": True}), \
+             patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
+             patch.object(computer_module, "_uia_click_named_control", return_value={"ok": False, "status": "uia_control_not_found"}), \
+             patch.object(computer_module, "_focus_semantic_text_input", return_value=False), \
+             patch.object(system_control, "focus_window_object"), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (957, 782), "white")), \
+             patch.object(computer_module, "save_screenshot_file", return_value="recovery.jpg"):
+            args = {"window": window.title, "destination": "Target", "text": "draft"}
+            first = await self.registry.call("send_text_to_window", args)
+            second = await self.registry.call("press_hotkey", {"keys": ["enter"], **args})
+            clicked = await self.registry.call("click_element", {"handle": 96, "target_desc": "another button"})
+            self.assertEqual("visual_coordinate_invalid", first["status"])
+            self.assertTrue(second["same_observation"])
+            self.assertFalse(clicked["ok"])
+            self.assertEqual(2, self.current_llm.calls)  # send aliases share the failed input query.
+            recovered = await self.registry.call("click_coordinate", {
+                "x": 200, "y": 300, "purpose": "inspect control", "screenshot_path": first["path"]})
+            self.assertEqual((300, 380), (recovered["x"], recovered["y"]))
+            self.assertEqual([("click", 300, 380, "left")], self.pg.actions)
+            self.assertEqual([], self.clipboard)
+
+    async def test_visual_failure_expires_and_changed_image_or_model_is_requeried(self):
+        window = FakeWindow("Generic app", 94)
+        first_model = FakeLLM((100, 12))
+        first_model.cfg = SimpleNamespace(chat_model="model-a")
+        self.current_llm = first_model
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "_uia_click_named_control", return_value={"ok": False, "status": "uia_control_not_found"}), \
+             patch.object(system_control, "focus_window_object"), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")) as grab, \
+             patch.object(computer_module, "save_screenshot_file", return_value="recovery.jpg"), \
+             patch.object(computer_module, "time", SimpleNamespace(monotonic=Mock(return_value=100))) as clock:
+            for _ in range(2):
+                result = await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertTrue(result["same_observation"])
+            self.assertEqual(1, first_model.calls)
+            grab.return_value = Image.new("RGB", (100, 80), "black")
+            await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertEqual(2, first_model.calls)
+            clock.monotonic.return_value = 111
+            await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertEqual(3, first_model.calls)
+            first_model.cfg.chat_model = "model-b"
+            await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertEqual(4, first_model.calls)
+            self.current_llm = FakeLLM((10, 12))
+            result = await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertTrue(result["ok"])
+
+    async def test_visual_failure_and_success_share_scaled_negative_monitor_mapping(self):
+        window = FakeWindow("Generic app", 94, (-1000, -120, 600, 400))
+        self.current_llm = FakeLLM((300, 20))  # Outside the 300x200 observation.
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "screen_bounds", return_value=(-1200, -200, 1920, 1080)), \
+             patch.object(computer_module, "_uia_click_named_control", return_value={"ok": False, "status": "uia_control_not_found"}), \
+             patch.object(system_control, "focus_window_object"), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (600, 400), "white")), \
+             patch.object(computer_module, "compress_screenshot", return_value=(b"scaled-image", 300, 200)), \
+             patch.object(computer_module, "save_screenshot_file", return_value="recovery.jpg"):
+            failed = await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+            self.assertEqual({"x": -1000, "y": -120}, failed["coordinate_mapping"]["origin"])
+            self.assertEqual([], self.pg.actions)
+            recovered = await self.registry.call("click_coordinate", {
+                "x": 30, "y": 40, "purpose": "inspect control", "screenshot_path": failed["path"]})
+            self.assertEqual((-940, -40), (recovered["x"], recovered["y"]))
+            self.current_llm = FakeLLM((30, 40))
+            for _ in range(2):
+                valid = await self.registry.call("click_element", {"target_desc": "Open", "handle": 94})
+                self.assertEqual((-940, -40), (valid["x"], valid["y"]))
+            self.assertEqual(2, self.current_llm.calls)  # Successful coordinates are never cached.
+
+    async def test_invalid_visual_send_button_preserves_draft_and_never_submits_again(self):
+        window = FakeWindow("Generic app", 94)
+        self.current_llm = FakeLLM((100, 12))
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "_uia_select_named_control", return_value={"ok": True}), \
+             patch.object(computer_module, "_uia_background_send", return_value={"available": False}), \
+             patch.object(computer_module, "_focus_semantic_text_input", return_value=True), \
+             patch.object(system_control, "focus_window_object"), \
+             patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (100, 80), "white")):
+            args = {"window": window.title, "destination": "Target", "text": "draft", "submit_key": "button"}
+            result = await self.registry.call("send_text_to_window", args)
+            repeated = await self.registry.call("press_hotkey", {**args, "keys": ["enter"]})
+        self.assertEqual("visual_coordinate_invalid", result["status"])
+        self.assertTrue(result["drafted"])
+        self.assertFalse(result["sent"])
+        self.assertTrue(result["_observation_image"])
+        self.assertEqual("previous_send_unconfirmed", repeated["status"])
+        self.assertEqual(["draft"], self.clipboard)
         self.assertFalse(any(action[0] in {"click", "press"} for action in self.pg.actions))
 
     async def test_visual_confirmation_rejects_malformed_or_nonboolean_reply(self):

@@ -2650,12 +2650,12 @@ def _stop_channel_control(source: str, identity: str = "") -> None:
         if belongs(key):
             CHANNEL_RESUME.pop(key, None)
     for key, active in tuple(CHANNEL_ACTIVE_TASKS.items()):
-        matches_identity = not identity or active.get("channel_identity") == identity
+        matches_identity = key[0] == source and (not identity or active.get("channel_identity") == identity)
         if (belongs(key) or matches_identity) and active.get("remote_control", True):
             active["stop"] = active["control_revoked"] = True
     for key, pending in tuple(CHANNEL_CONFIRM.items()):
         active = CHANNEL_ACTIVE_TASKS.get(key, {})
-        if (belongs(key) or (identity and active.get("channel_identity") == identity)) and not pending.done():
+        if (belongs(key) or (key[0] == source and identity and active.get("channel_identity") == identity)) and not pending.done():
             pending.set_result(False)
 
 
@@ -7830,6 +7830,11 @@ async def _handle_channel_command(source: str, target: str, text: str, account_i
                             CHANNEL_RESUME[session_key] = checkpoint
                         resume_notice = "模型服务中断，已保存完成步骤；继续前需核对外部状态"
                     elif ev.type == "aborted":
+                        reason = ("control_revoked" if active.get("control_revoked") else
+                                  "remote_locked" if CHANNEL_LOCKED["locked"] else
+                                  "permission_changed" if _channel_permission(source) != permission else
+                                  "stop_requested_or_escape" if active["stop"] else "task_cancelled")
+                        logging.getLogger(__name__).info("Channel task aborted source=%s reason=%s", source, reason)
                         checkpoint = ev.data.get("resume_messages")
                         if checkpoint:
                             CHANNEL_RESUME[session_key] = checkpoint
