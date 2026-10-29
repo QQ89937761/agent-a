@@ -10,8 +10,8 @@ def _ensure_stdio() -> None:
     # PyInstaller's windowed bootloader sets Python streams to None even when
     # Electron supplies valid output pipes. Recover those handles before fallback.
     if os.name == "nt":
-        for name, identifier in (("stdout", -11), ("stderr", -12)):
-            if getattr(sys, name) is not None:
+        for name, identifier in (("stdin", -10), ("stdout", -11), ("stderr", -12)):
+            if getattr(sys, name, None) is not None:
                 continue
             duplicate = None
             try:
@@ -25,9 +25,10 @@ def _ensure_stdio() -> None:
                 process = _winapi.GetCurrentProcess()
                 duplicate = _winapi.DuplicateHandle(process, handle,
                                                     process, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
-                fd = msvcrt.open_osfhandle(duplicate, os.O_WRONLY)
+                reading = name == "stdin"
+                fd = msvcrt.open_osfhandle(duplicate, os.O_RDONLY if reading else os.O_WRONLY)
                 duplicate = None  # fd now owns the duplicated handle.
-                setattr(sys, name, io.open(fd, "w", encoding="utf-8", errors="replace", buffering=1))
+                setattr(sys, name, io.open(fd, "r" if reading else "w", encoding="utf-8", errors="replace", buffering=1))
             except (OSError, ValueError):
                 if duplicate is not None:
                     _winapi.CloseHandle(duplicate)
@@ -54,6 +55,11 @@ if getattr(sys, "_MEIPASS", ""):
     payload = Path(sys._MEIPASS) / "server-payload"
     if payload.is_dir():
         sys.path.insert(0, str(payload))
+
+if __name__ == '__main__' and sys.argv[1:] == ['--uia-reader']:
+    from backend.modules.computer.uia_query import serve
+    serve()
+    raise SystemExit(0)
 
 # A private UIA query process must return before importing or starting the server.
 if __name__ == '__main__' and len(sys.argv) == 4 and sys.argv[1] == '--inspect-ui':

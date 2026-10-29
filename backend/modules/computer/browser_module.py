@@ -101,16 +101,20 @@ class BrowserController:
         self._refs: dict[str, dict[str, Any]] = {}
         self._launch_lock = asyncio.Lock()
         self._process: subprocess.Popen | None = None
+        self._http_client: httpx.AsyncClient | None = None
 
     async def _http(
         self, method: str, path: str, timeout: float = 5.0, *, expect_json: bool = True,
     ) -> Any:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            response = await client.request(method, self.endpoint + path)
-            response.raise_for_status()
-            if not expect_json:
-                return response.text
-            return response.json() if response.content else {}
+        # Reuse the loopback connection instead of rebuilding a client/TLS
+        # configuration for every page probe and element action.
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(trust_env=False)
+        response = await self._http_client.request(method, self.endpoint + path, timeout=timeout)
+        response.raise_for_status()
+        if not expect_json:
+            return response.text
+        return response.json() if response.content else {}
 
     async def _available(self) -> bool:
         try:
@@ -256,6 +260,9 @@ class BrowserController:
             self._download_socket = None
             self._download_session = ""
         self._refs.clear()
+        client, self._http_client = self._http_client, None
+        if client is not None:
+            await client.aclose()
         if process is None or process.poll() is not None:
             return
 

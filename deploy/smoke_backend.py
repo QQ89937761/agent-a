@@ -157,6 +157,22 @@ def main():
                 sys.executable, str(root / "deploy/smoke_plugin_runtimes.py"),
                 str(home), str(Path(backend.exe()).parent.parent),
             ], cwd=root, env=env, check=True, timeout=120)
+        if os.name == "nt":
+            # Exercise the windowed bootloader's inherited stdin/stdout pipes twice.
+            # Invalid HWND=1 deliberately avoids reading any user application data.
+            query_exe = Path(backend.exe()) if args.portable else executable
+            requests = "".join(json.dumps({"id": sequence, "options": {
+                "handle": 1, "max_depth": 0, "limit": 1, "include_offscreen": False,
+            }}) + "\n" for sequence in (1, 2))
+            query = subprocess.run([str(query_exe), "--uia-reader"], input=requests,
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   env=env, cwd=home, timeout=20, startupinfo=startup)
+            require(query.returncode == 0, "Frozen read-only reader exited unexpectedly")
+            replies = [json.loads(line) for line in query.stdout.splitlines()]
+            require([reply.get("id") for reply in replies] == [1, 2]
+                    and all(isinstance(reply.get("result"), dict) for reply in replies),
+                    "Frozen reader did not return two matched query results")
+            print("PASS frozen read-only UIA process: inherited pipes and two requests", flush=True)
         token = (home / "ui_token.txt").read_text(encoding="utf-8").strip()
         def post(path, payload):
             request = urllib.request.Request(base + path, data=json.dumps(payload).encode(),

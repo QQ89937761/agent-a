@@ -23,6 +23,7 @@ import inspect
 import json
 import hashlib
 import ssl
+import secrets
 import time
 from typing import Any, Callable, Awaitable
 
@@ -89,6 +90,9 @@ class WorkerBridge:
         self._on_model_order = on_model_order
         self._stop = False
         self._ws = None
+        self._desktop_stop = False
+        self._drained = []
+        self._epoch = ""
 
     async def run_forever(self, retry_base: float = 2.0, retry_max: float = 30.0) -> None:
         """一直保持与 hub 的连接;断了就退避重连。"""
@@ -118,6 +122,7 @@ class WorkerBridge:
                     await ws.send(json.dumps({
                         "type": "hello", "token": self.token, "worker_id": self.worker_id,
                         "tools": tools, "model_order_sync": self._on_model_order is not None,
+                        "desktop_stop": 1, "desktop_drained": self._drained,
                     }))
                     reply = json.loads(await ws.recv())
                     if reply.get("type") != "welcome":
@@ -126,6 +131,8 @@ class WorkerBridge:
                         continue
                     if self._on_model_order is not None and "model_order" in reply:
                         await self._receive_model_order(reply["model_order"])
+                    self._desktop_stop = reply.get("desktop_stop") == 1
+                    self._epoch = str(reply.get("desktop_epoch") or "")
                     self._ws = ws
                     print("[bridge] 已连上 hub,等待派活")
                     attempt = 0  # 连上就重置退避
@@ -162,16 +169,51 @@ class WorkerBridge:
                 await ws.send(json.dumps(payload))
 
         heartbeat_task = asyncio.create_task(heartbeat())
+        tasks = {}
+        stops = {}
+        seen = set()
+        desktop_ids = set()
         try:
             async for raw in ws:
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(msg, dict):
+                    continue
                 t = msg.get("type")
                 if t == "task":
-                    # 每个任务独立跑,不阻塞后续任务的接收
-                    asyncio.ensure_future(self._do_task(ws, msg))
+                    tid = msg.get("id")
+                    if not isinstance(tid, str) or not 1 <= len(tid) <= 160:
+                        continue
+                    if self._desktop_stop and not tid.startswith(self._epoch + "-t"):
+                        continue  # A delayed task from an old connection cannot run again.
+                    if tid in seen:
+                        # An acknowledgement is never a terminal execution result.
+                        await ws.send(json.dumps({"type": "duplicate", "id": tid}))
+                        continue
+                    if len(seen) >= 4096:
+                        await ws.close()  # Bound dedup memory; the next connection has a new epoch.
+                        break
+                    seen.add(tid)
+                    event = asyncio.Event() if msg.get("tool") == "desktop_execute" else None
+                    if event is not None:
+                        desktop_ids.add(tid)
+                        stops[tid] = event
+                    task = asyncio.create_task(self._do_task(ws, msg, event))
+                    tasks[tid] = task
+                    def finished(done, task_id=tid):
+                        tasks.pop(task_id, None)
+                        stops.pop(task_id, None)
+                        if not done.cancelled():
+                            done.exception()
+                    task.add_done_callback(finished)
+                elif t == "stop" and self._desktop_stop:
+                    task_id = msg.get("id")
+                    event = stops.get(task_id) if isinstance(task_id, str) else None
+                    if event is not None:
+                        event.set()
+                        await ws.send(json.dumps({"type": "stopping", "id": msg["id"]}))
                 elif t == "ping":
                     await ws.send(json.dumps({"type": "pong"}))
                 elif t == "pong":
@@ -187,17 +229,43 @@ class WorkerBridge:
                             print(f"[bridge] 展示提醒失败: {e}")
         finally:
             heartbeat_task.cancel()
+            pending = list(tasks.items())
+            for event in stops.values():
+                event.set()
+            for tid, task in pending:
+                if tid not in stops:
+                    task.cancel()
+            # Drain current desktop input before reconnecting; never replay its task.
+            await asyncio.gather(heartbeat_task, *(task for _, task in pending), return_exceptions=True)
+            self._drained = list(desktop_ids)
 
-    async def _do_task(self, ws, msg: dict) -> None:
+    async def _do_task(self, ws, msg: dict, stop_event=None) -> None:
         tid = msg.get("id")
         tool = msg.get("tool", "")
         args = msg.get("args", {}) or {}
+        from backend.modules.computer.desktop_runtime import interrupt_check, request_stop
+        check_token = interrupt_check.set(stop_event.is_set) if stop_event is not None else None
+        stop_token = request_stop.set(stop_event.set) if stop_event is not None else None
         try:
-            result = await self.run_tool(tool, args)
+            if stop_event is not None and stop_event.is_set():
+                result = {"ok": False, "status": "interrupted", "completed": 0, "steps": []}
+            elif (tool == "desktop_execute" and not self._desktop_stop
+                    and len(args.get("actions", [])) > 1):
+                result = {"ok": False, "status": "remote_single_step_required", "completed": 0}
+            else:
+                result = await self.run_tool(tool, args)
             ok = True
+        except asyncio.CancelledError:
+            result = {"ok": False, "status": "action_unconfirmed", "completed": None,
+                      "note": "执行被取消，当前动作结果不确定；重新观察，不要重放。"}
+            ok = False
         except Exception as e:
             result = f"执行失败: {e}"
             ok = False
+        finally:
+            if check_token is not None:
+                interrupt_check.reset(check_token)
+                request_stop.reset(stop_token)
         try:
             await ws.send(json.dumps(
                 {"type": "result", "id": tid, "ok": ok, "result": result,
@@ -266,6 +334,10 @@ class HubBridge:
         self._on_worker_offline = on_worker_offline
         self._get_model_order = get_model_order
         self._model_order_sync = False
+        self._desktop_stop = False
+        self._epoch = secrets.token_hex(8)
+        self._unsettled: set[str] = set()
+        self._desktop_tasks: set[str] = set()
         self._tool_count = 0
         self._cached_tool_count = 0
         self._tools_fingerprint = ""
@@ -274,8 +346,14 @@ class HubBridge:
     def worker_online(self) -> bool:
         return self._ws is not None
 
+    @property
+    def supports_desktop_stop(self) -> bool:
+        return self._ws is not None and self._desktop_stop
+
     def status(self) -> dict[str, Any]:
         return {
+            "desktop_stop": self.supports_desktop_stop,
+            "unsettled_tasks": len(self._unsettled),
             "online": self.worker_online,
             "worker_id": self._worker_id,
             "connected_at": int(self._connected_at) if self._connected_at else None,
@@ -286,6 +364,8 @@ class HubBridge:
         }
 
     def _fail_pending(self, reason: str) -> None:
+        self._unsettled.update(self._desktop_tasks)
+        self._desktop_tasks.clear()
         for fut in self._pending.values():
             if not fut.done():
                 fut.set_result({"ok": False, "result": reason, "offline": True})
@@ -297,6 +377,9 @@ class HubBridge:
         try:
             first = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=10))
         except Exception:
+            await ws.close(code=4003)
+            return
+        if not isinstance(first, dict):
             await ws.close(code=4003)
             return
         supplied = str(first.get("token") or "")
@@ -312,17 +395,27 @@ class HubBridge:
         worker_id = str(first.get("worker_id") or "unknown-worker")[:100]
         old_ws = self._ws
         if old_ws is not None and old_ws is not ws:
+            self._ws = None
             self._fail_pending("worker 已被新连接替换")
             try:
                 await old_ws.close(code=4002)
             except Exception:
                 pass
+        self._epoch = secrets.token_hex(8)
         welcome = {"type": "welcome"}
+        self._desktop_stop = first.get("desktop_stop") == 1
+        if self._desktop_stop:
+            welcome["desktop_stop"] = 1
+            welcome["desktop_epoch"] = self._epoch
         self._model_order_sync = first.get("model_order_sync") is True
         if self._model_order_sync and self._get_model_order is not None:
             welcome["model_order"] = self._get_model_order()
         await ws.send_text(json.dumps(welcome))
         self._ws = ws
+        # Clear only exact task IDs the authenticated worker has finished draining.
+        drained = first.get("desktop_drained")
+        if self._desktop_stop and isinstance(drained, list):
+            self._unsettled.difference_update(tid for tid in drained[:4096] if isinstance(tid, str))
         self._worker_id = worker_id
         self._connected_at = self._last_seen = time.time()
         self._receive_tools(first.get("tools"))
@@ -335,7 +428,15 @@ class HubBridge:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if self._ws is not ws:
+                    break
+                if not isinstance(msg, dict):
+                    continue
                 if msg.get("type") == "result":
+                    if not isinstance(msg.get("id"), str):
+                        continue
+                    self._unsettled.discard(msg.get("id"))
+                    self._desktop_tasks.discard(msg.get("id"))
                     self._receive_tools(msg.get("tools"))
                     fut = self._pending.pop(msg.get("id"), None)
                     if fut and not fut.done():
@@ -351,6 +452,7 @@ class HubBridge:
         finally:
             if self._ws is ws:
                 self._ws = None
+                self._desktop_stop = False
                 self._tool_count = 0
                 self._tools_fingerprint = ""
                 # 只清理由当前连接派出的任务。旧连接退出不能影响替代它的新连接。
@@ -378,23 +480,76 @@ class HubBridge:
         """把一个工具调用派给 worker,等它回结果。worker 不在线则立即返回离线。"""
         if self._ws is None:
             return {"ok": False, "result": "电脑现在不在线", "offline": True}
+        from backend.modules.computer.desktop_runtime import interrupt_check
+        desktop = tool == "desktop_execute"
+        check = interrupt_check.get() if desktop else None
+        if self._unsettled or self._desktop_tasks:
+            return {"ok": False, "result": {"ok": False, "status": "remote_stop_unconfirmed",
+                    "completed": None, "note": "上一远程任务尚未确认停止，暂不派发新操作；不要重复执行。"}}
+        if check and check():
+            return {"ok": True, "result": {"ok": False, "status": "interrupted", "completed": 0}}
         self._seq += 1
-        tid = f"t{self._seq}"
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
+        tid = f"{self._epoch}-t{self._seq}"
+        ws, can_stop = self._ws, self.supports_desktop_stop
+        fut = asyncio.get_running_loop().create_future()
         self._pending[tid] = fut
+        if desktop:
+            self._desktop_tasks.add(tid)
+        stopped = False
+
+        async def stop():
+            nonlocal stopped
+            if desktop and not fut.done():
+                self._unsettled.add(tid)
+            if stopped or not (desktop and can_stop):
+                return
+            stopped = True
+            try:
+                async with asyncio.timeout(2):
+                    async with self._send_lock:
+                        await ws.send_text(json.dumps({"type": "stop", "id": tid}))
+            except Exception:
+                pass  # Unknown result stays quarantined until terminal result or a safe reconnect.
+
         try:
-            async with self._send_lock:
-                await self._ws.send_text(json.dumps(
-                    {"type": "task", "id": tid, "tool": tool, "args": args}, ensure_ascii=False))
+            async with asyncio.timeout(min(timeout, 5)):
+                async with self._send_lock:
+                    if ws is not self._ws:
+                        self._pending.pop(tid, None)
+                        self._desktop_tasks.discard(tid)
+                        return {"ok": False, "result": "worker连接已变化，未派发", "offline": True}
+                    await ws.send_text(json.dumps(
+                        {"type": "task", "id": tid, "tool": tool, "args": args}, ensure_ascii=False))
+        except asyncio.CancelledError:
+            await stop()
+            if not desktop:
+                self._pending.pop(tid, None)
+            raise
         except Exception as e:
             self._pending.pop(tid, None)
-            return {"ok": False, "result": f"派活失败: {e}", "offline": True}
+            await stop()
+            return {"ok": False, "result": f"派活失败，执行情况未知: {e}", "offline": True}
+        deadline = time.monotonic() + timeout
         try:
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(tid, None)
-            return {"ok": False, "result": f"电脑执行超时({timeout:.0f}s)"}
+            while not fut.done():
+                if not stopped and check and check():
+                    await stop()
+                    deadline = min(deadline, time.monotonic() + 5)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    await stop()
+                    if not desktop:
+                        self._pending.pop(tid, None)
+                    return {"ok": False, "result": {"ok": False,
+                            "status": "remote_stop_unconfirmed" if desktop else "remote_timeout",
+                            "completed": None, "note": "执行超时；已请求停止后续步骤，当前结果尚未确认，不要重放。"}}
+                await asyncio.wait({fut}, timeout=min(.05, remaining))
+            return fut.result()
+        except asyncio.CancelledError:
+            await stop()
+            if not desktop:
+                self._pending.pop(tid, None)
+            raise
 
     async def sync_model_order(self) -> bool:
         """Only upgraded, authenticated workers receive non-secret model ordering."""

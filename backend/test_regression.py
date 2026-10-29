@@ -1603,6 +1603,25 @@ class MemoryBackupTests(unittest.TestCase):
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_desktop_plan_is_single_step_until_bridge_supports_interjections(self):
+        from backend.api import server
+        from unittest.mock import AsyncMock, patch
+        registry = ToolRegistry()
+        bridge = HubBridge("test")
+        bridge.dispatch = AsyncMock(return_value={"ok": True, "result": {"ok": True, "completed": 1}})
+        with patch.object(server, "REGISTRY", registry), patch.object(server, "HUB_BRIDGE", bridge), \
+                patch.object(server, "_WORKER_PROXY_TOOLS", set()):
+            server._sync_worker_tools([{
+                "schema": {"type": "function", "function": {"name": "desktop_execute", "description": "plan",
+                    "parameters": {"type": "object"}}}, "side_effect": True,
+            }], persist=False)
+            result = await registry.call("desktop_execute", {"observation_id": "test", "actions": [{}, {}]})
+            self.assertEqual("remote_single_step_required", result["status"])
+            bridge.dispatch.assert_not_awaited()
+            result = await registry.call("desktop_execute", {"observation_id": "test", "actions": [{}]})
+            self.assertEqual(1, result["completed"])
+            bridge.dispatch.assert_awaited_once()
+
     async def test_worker_proxy_replaces_hub_channel_media_tools(self):
         from backend.api import server
 

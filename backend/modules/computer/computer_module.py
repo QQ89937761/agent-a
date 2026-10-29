@@ -156,7 +156,7 @@ def _window_region(window: Any, bounds: tuple[int, int, int, int]) -> tuple[int,
 
 
 def _uia_control_entries(
-    handle: int, *, max_depth: int = 36, limit: int = 2500,
+    handle: int, *, max_depth: int = 36, limit: int = 2500, stats: dict | None = None,
 ) -> list[tuple[Any, int]]:
     """Read a bounded UIA subtree without activating the target window."""
     if not handle:
@@ -175,12 +175,19 @@ def _uia_control_entries(
         while queue and len(entries) < limit:
             control, depth = queue.popleft()
             entries.append((control, depth))
-            if depth < max_depth:
+            if depth < max_depth or stats is not None:
                 try:
                     children = control.GetChildren() or []
                 except Exception:
                     children = []
-                queue.extend((child, depth + 1) for child in children)
+                    if stats is not None:
+                        stats["truncated"] = True
+                if depth < max_depth:
+                    queue.extend((child, depth + 1) for child in children)
+                elif children and stats is not None:
+                    stats["truncated"] = True
+        if queue and stats is not None:
+            stats["truncated"] = True
         return entries
     except Exception:
         return []
@@ -225,22 +232,45 @@ def _uia_control_info(control: Any, depth: int) -> dict[str, Any]:
         "automation_id": str(_uia_attr(control, "AutomationId", "") or "")[:120],
         "class_name": str(_uia_attr(control, "ClassName", "") or "")[:120],
         "offscreen": bool(_uia_attr(control, "IsOffscreen", False)),
+        "focused": bool(_uia_attr(control, "HasKeyboardFocus", False)),
+        "enabled": bool(_uia_attr(control, "IsEnabled", True)),
+        "password": bool(_uia_attr(control, "IsPassword", False)),
         "rect": _uia_rect_info(control),
     }
 
 
-def _uia_snapshot(handle: int, *, max_depth: int, limit: int, include_offscreen: bool) -> dict:
+def _uia_snapshot(handle: int, *, max_depth: int, limit: int, include_offscreen: bool, value_check: dict | None = None) -> dict:
     """Read and serialize every COM property in one apartment, returning plain data."""
-    entries = _uia_control_entries(handle, max_depth=max_depth, limit=limit)
+    stats = {"truncated": False}
+    entries = _uia_control_entries(handle, max_depth=max_depth, limit=limit, stats=stats)
     controls = [_uia_control_info(control, depth) for control, depth in entries]
     if not include_offscreen:
         controls = [info for info in controls if not info['offscreen']]
-    return {'ok': bool(controls), 'status': 'ok' if controls else 'uia_tree_empty',
-            'control_mode': 'uia', 'handle': handle, 'count': len(controls),
-            'truncated': len(entries) >= max(1, min(int(limit), 2500)), 'controls': controls}
+    result = {'ok': bool(controls), 'status': 'ok' if controls else 'uia_tree_empty',
+              'control_mode': 'uia', 'handle': handle, 'count': len(controls),
+              'truncated': stats['truncated'], 'controls': controls}
+    if value_check is not None:
+        from backend.modules.computer.desktop_runtime import matching_controls
+        candidates = [(control, info) for (control, _), info in
+                      zip(entries, [_uia_control_info(c, d) for c, d in entries])
+                      if matching_controls([info], value_check['expect'])]
+        result['value_matches'] = False
+        result['value_available'] = False
+        if not stats['truncated'] and len(candidates) == 1 and not candidates[0][1]['password']:
+            try:
+                import uiautomation as auto
+                pattern = candidates[0][0].GetPattern(auto.PatternId.ValuePattern)
+                value = pattern.Value
+                if not isinstance(value, str):
+                    raise ValueError('UIA field value unavailable')
+                result['value_available'] = True
+                result['value_matches'] = value == value_check['equals']
+            except Exception:
+                pass  # Never expose actual field contents or guess an unreadable value.
+    return result
 
 
-async def _inspect_uia_isolated(handle: int, **options) -> dict:
+async def _inspect_uia_isolated(handle: int, *, query_timeout: float | None = None, **options) -> dict:
     # A hung provider must not freeze chat, Esc handling, or the next visual action.
     with tempfile.TemporaryDirectory(prefix='xiaoa-uia-') as temp:
         result_file = Path(temp) / 'result.json'
@@ -250,7 +280,7 @@ async def _inspect_uia_isolated(handle: int, **options) -> dict:
         args += ['--inspect-ui', str(result_file), json.dumps({'handle': handle, **options})]
         process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, **hidden_subprocess_kwargs())
-        deadline = time.monotonic() + _UIA_QUERY_TIMEOUT
+        deadline = time.monotonic() + (_UIA_QUERY_TIMEOUT if query_timeout is None else query_timeout)
         try:
             while process.poll() is None:
                 system_control.check_foreground_permission()
@@ -498,6 +528,9 @@ def _uia_click_named_control(
 
     control, name, type_name, _ = candidates[0]
     matched_id = str(_uia_attr(control, "AutomationId", "") or "")[:120]
+    precondition = system_control.INPUT_PRECONDITION.get()
+    if precondition is not None:
+        precondition(control)
     if blocked_names and _looks_like_message_action(name):
         return {
             "ok": False,
@@ -1551,6 +1584,13 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 failure = await ensure_target_focus(control, target, handle)
                 if failure:
                     return failure
+            if text.isascii() and len(text) >= 80 and not any(ord(c) < 32 or ord(c) == 127 for c in text):
+                # Preserve keyboard semantics and the user's clipboard. Short chunks
+                # permit focus/Esc checks between writes without per-character delay.
+                for offset in range(0, len(text), 80):
+                    await system_control.run_controlled(control, pyautogui.write, text[offset:offset + 80], interval=0)
+                return await _observe_after({"ok": True, "control_mode": "foreground_exclusive",
+                    "characters": len(text), "input_method": "keyboard_chunks"}, observe, observation_region)
             if text.isascii():
                 lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
                 for index, line in enumerate(lines):
@@ -1967,3 +2007,49 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             return await _observe_after({"ok": True, "control_mode": "foreground_exclusive", "keys": normalized_keys}, observe, observation_region)
         finally:
             _end_foreground(control)
+
+
+    # Unified desktop tools reuse the exact registered input/permission paths.
+    from backend.modules.computer.desktop_runtime import register_tools as register_desktop_tools, window_identity
+
+    def desktop_resolve(window, handle):
+        import pygetwindow as gw
+        windows = list(gw.getAllWindows())
+        if handle is not None:
+            return next((w for w in windows if int(getattr(w, "_hWnd", 0)) == handle), None)
+        if not window:
+            return next((w for w in windows if int(getattr(w, "_hWnd", 0)) == _foreground_window_handle()), None)
+        queries = system_control.window_queries(window)
+        exact = [w for w in windows if str(getattr(w, "title", "")).strip().lower() in queries]
+        matches = exact or [w for w in windows if any(q in str(getattr(w, "title", "")).lower() for q in queries)]
+        return matches[0] if len(matches) == 1 else None
+
+    def desktop_inventory():
+        import pygetwindow as gw
+        windows = [w for w in gw.getAllWindows() if str(getattr(w, "title", "")).strip()][:30]
+        return [window_identity(w) for w in windows]
+
+    from backend.modules.computer.uia_query import UIAReader
+    uia_reader = UIAReader()
+
+    async def desktop_inspect(handle, **options):
+        # Short plans must switch to the visual path promptly for slow providers.
+        return await uia_reader.query(handle, max_depth=36, limit=500,
+                                      include_offscreen=False, query_timeout=3.0, **options)
+
+    async def desktop_capture(info):
+        rect = info["rect"]
+        left, top, right, bottom = await _screen_bounds()
+        x, y = max(left, rect["x"]), max(top, rect["y"])
+        width = min(right, rect["x"] + rect["width"]) - x
+        height = min(bottom, rect["y"] + rect["height"]) - y
+        if info["minimized"] or width <= 0 or height <= 0:
+            return {"image_status": "window_not_visible", "image_note": "窗口最小化或不在可见屏幕，不截图猜测；先focus_window。"}
+        image = await _capture((x, y, width, height))
+        result = await asyncio.to_thread(screenshot_result, image, "桌面目标窗口观察", "auto")
+        result = remember_screenshot(result, image, x, y)
+        result["image_note"] = "画面来自桌面区域，可能被其他窗口遮挡；它不证明目标窗口内容或操作成功。"
+        return result
+
+    register_desktop_tools(registry, resolve=desktop_resolve, inventory=desktop_inventory,
+                           inspect=desktop_inspect, capture=desktop_capture, foreground=_foreground_window_handle)

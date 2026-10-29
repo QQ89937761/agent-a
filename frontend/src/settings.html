@@ -424,6 +424,7 @@
     details > summary { color: #34445a; cursor: pointer; font-weight: 700; }
     code { color: #245ac2; }
     a { color: #245ac2; }
+    #update_repository_link { overflow-wrap: anywhere; }
     .actions { gap: 10px; }
     #project_libraries_card { container-type: inline-size; }
     .project-library-actions { display: grid; grid-template-columns: repeat(3, max-content); }
@@ -962,7 +963,7 @@
   <div class="card" id="release_update_card" data-local-desktop-only>
     <h2>版本与更新</h2>
     <div class="inline-info">当前版本：<code id="update_current_version">读取中…</code>　最新版本：<code id="update_latest_version">尚未检查</code></div>
-    <div class="hint" id="update_release_notes">便携版更新通过 GitHub Releases 发布；云端使用本机内置文件，更新云端前请先更新本机小A。开发版不会替换源码目录。</div>
+    <div class="hint"><a id="update_repository_link" href="https://github.com/QQ89937761/agent-a" target="_blank" rel="noopener noreferrer">https://github.com/QQ89937761/agent-a</a></div>
     <div class="actions">
       <button class="secondary" id="check_update" type="button">检查更新</button>
       <button class="secondary" id="update_local" type="button" hidden>更新本地小A</button>
@@ -2692,7 +2693,6 @@
         latestRelease = result.latest;
         renderCloudVersion();
         $("update_latest_version").textContent = versionLabel(result.latest?.version);
-        $("update_release_notes").textContent = result.latest?.notes || result.message || "便携版发布后，可在此检查 GitHub Releases 更新。";
         $("update_local").hidden = !result.update_available || !desktopPackaged;
         status.textContent = result.update_available ? "发现新版本" : result.latest ? "当前已是最新版本" : "暂无公开版本";
         status.className = "msg";

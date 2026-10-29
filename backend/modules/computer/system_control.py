@@ -60,6 +60,13 @@ _CONTROL_SESSION: contextvars.ContextVar[ControlSession | None] = contextvars.Co
 )
 
 
+# Optional task-scoped guard, installed only by bounded desktop plans. Original
+# individual tools retain their existing focus-recovery behavior.
+INPUT_PRECONDITION: contextvars.ContextVar[Callable[..., None] | None] = contextvars.ContextVar(
+    "desktop_input_precondition", default=None,
+)
+
+
 def set_foreground_notice_callback(callback: _ForegroundNotice | None, *, on_escape=None):
     """Install a task-local callback and return its context token."""
     return (_FOREGROUND_NOTICE.set(callback), _CONTROL_SESSION.set(
@@ -494,6 +501,9 @@ async def run_controlled(
 
 def _run_controlled_input(function, args, kwargs):
     check_foreground_permission()
+    precondition = INPUT_PRECONDITION.get()
+    if precondition is not None:
+        precondition()
     try:
         if (getattr(function, '__module__', '') == 'backend.modules.computer.computer_module'
                 and function.__name__.startswith(('_uia_', '_focus_semantic_'))):

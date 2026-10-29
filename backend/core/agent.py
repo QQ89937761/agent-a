@@ -900,6 +900,7 @@ SYSTEM_PROMPT = """你是“小A”，一个运行在用户电脑上的 AI 办�
 - 启动软件优先 launch_app，切换已打开的窗口优先 focus_window；已成功启动后不用重复启动。网页任务（包括普通打开网页）默认使用小A独立浏览器 browser_open，配合 browser_snapshot 和 browser_click/browser_type/browser_select 通过网页结构后台操作，不抢鼠标键盘；browser_wait 检查加载或提交结果。仅用户明确要求使用系统默认浏览器或已有个人浏览器窗口时才用 open_url；独立浏览器有自己的登录状态，不得把默认浏览器误称为小A专用浏览器。
 - browser_tabs 可按 target_id 切换或关闭标签页。小A专用浏览器使用独立资料目录，首次使用网站可能需要用户登录，注意不要混淆普通浏览器与专用浏览器。任务完成且页面不再需要、用户未要求保留时，用 browser_tabs 按 target_id 关闭本任务打开的标签页；不要关闭其他任务或用户原有的标签页。用户已关闭页面时核对标签页列表，不要重复截图或反复关闭。
 - 任务完成后，只有确认窗口是本任务新打开、产物已保存核验且用户没有要求继续使用时，才用 close_window 按精确标题礼貌关闭（force=false）。不关闭用户原有窗口，不按进程名批量关闭；窗口归属、保存状态或后续用途不明确时保留并说明，遇到保存弹窗不绕过、不强杀。
+- 通用桌面任务优先desktop_observe，一次查看唯一窗口身份、紧凑控件和必要画面；主窗/登录窗/弹窗须区分，缺控件直接采用现有视觉工具，避免反复读取空树。对已确认且连续的短操作可用desktop_execute一次执行1到5步，每步expect指定唯一控件，输入/热键只向已确认焦点控件执行；可用after核验控件出现、focused焦点或value_equals输入值，completed仅代表已执行，verified才代表条件已确认；出现弹窗、焦点变化、歧义或用户插话后重新观察。坐标、发送、启动、关闭和命令仍单独用原工具，不提前猜测新界面坐标；已有网页/文档接口优先。
 - 截图的模型观察图可能缩小；按图定位时，给 click_coordinate/move_pointer/scroll_screen/drag_pointer 传该截图 path 作为 screenshot_path，坐标直接使用观察图像素，工具会换算桌面缩放与裁剪偏移。只在使用 list_windows 的桌面原始坐标时省略 screenshot_path。
 - 输入文档文字时给 type_text 传目标窗口 handle；授权弹窗或用户插话可能切走焦点，先恢复目标再输入，不能改用命令行剪贴板绕过输入或发送保护。文档标题含“小A”不代表聊天窗口。
 - “小A正在接管电脑”是小A自身状态条，对鼠标穿透；不要尝试关闭它，也不要按 Esc 消除提示。Esc 是用户主动交还控制的入口。
@@ -1170,7 +1171,13 @@ class Agent:
             return None
 
 
+        desktop_interjections: list[str] = []
+
         def take_interjections() -> list[str]:
+            if desktop_interjections:
+                items = desktop_interjections[:]
+                desktop_interjections.clear()
+                return items
             if self.interjection_fn is None:
                 return []
             return [
@@ -1571,7 +1578,7 @@ class Agent:
                     completed_launches.pop(signature, None)
 
                 # ponytail: 只挡无具体目标的寒暄，不用关键词白名单替模型判断任务。
-                if (name == "screen_capture" and step == 0 and len(recent_calls) == 1
+                if (name in {"screen_capture", "desktop_observe"} and step == 0 and len(recent_calls) == 1
                         and not any(_image_message_source(m.get("content")) == "attachment" for m in messages)
                         and _is_ambiguous_request(user_input)):
                     result_str = "当前只有寒暄或呼唤，没有具体任务；请简短问清目标，不要查看屏幕猜测。"
@@ -1704,10 +1711,25 @@ class Agent:
                 result: Any = None
                 tool_started = time.perf_counter()
                 try:
-                    result = (
-                        self._read_result_ref(str(args.get("ref") or ""))
-                        if reads_result_ref else await self.tools.call(name, args)
-                    )
+                    if name == "desktop_execute":
+                        from backend.modules.computer.desktop_runtime import interrupt_check
+                        def stop_desktop_plan():
+                            if self.abort_fn is not None and self.abort_fn():
+                                return True
+                            if desktop_interjections:
+                                return True
+                            desktop_interjections.extend(take_interjections())
+                            return bool(desktop_interjections)
+                        desktop_token = interrupt_check.set(stop_desktop_plan)
+                        try:
+                            result = await self.tools.call(name, args)
+                        finally:
+                            interrupt_check.reset(desktop_token)
+                    else:
+                        result = (
+                            self._read_result_ref(str(args.get("ref") or ""))
+                            if reads_result_ref else await self.tools.call(name, args)
+                        )
                     # 工具可返回带截图的观察:{"_observation_image": <png b64>, "text": ...}
                     if isinstance(result, dict) and (result.get("_observation_image") or result.get("_display_image")):
                         obs_image_b64 = result.get("_observation_image")

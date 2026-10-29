@@ -22,6 +22,21 @@ class DesktopSessionTests(unittest.IsolatedAsyncioTestCase):
         control.reset_foreground_notice_callback(self.context)
         self.listener.stop()
 
+    async def test_plan_precondition_crosses_input_thread_and_cannot_leak_after_reset(self):
+        owner = await control.acquire_control(.1)
+        calls = []
+        def reject():
+            calls.append("guard")
+            raise RuntimeError("changed before input")
+        token = control.INPUT_PRECONDITION.set(reject)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "changed before input"):
+                await control.run_controlled(owner, lambda: calls.append("input"))
+        finally:
+            control.INPUT_PRECONDITION.reset(token)
+        await control.run_controlled(owner, lambda: calls.append("ordinary input"))
+        self.assertEqual(["guard", "ordinary input"], calls)
+
     async def test_owned_cad_pid_crosses_tool_threads_but_not_task_sessions(self):
         await asyncio.to_thread(control.mark_owned_application, "autocad", 42)
         self.assertTrue(control.owned_application("autocad"))

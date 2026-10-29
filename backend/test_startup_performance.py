@@ -30,7 +30,7 @@ class WindowedLoggingTests(unittest.TestCase):
                 winapi = SimpleNamespace(GetCurrentProcess=lambda: 1,
                     GetStdHandle=lambda identifier: output.fileno(),
                     DuplicateHandle=lambda *args: output.fileno(), DUPLICATE_SAME_ACCESS=2)
-                streams = SimpleNamespace(stdout=None, stderr=None)
+                streams = SimpleNamespace(stdin=object(), stdout=None, stderr=None)
                 namespace = {"os": SimpleNamespace(name="nt", O_WRONLY=os.O_WRONLY),
                              "sys": streams, "Path": Path}
                 with patch.dict(sys.modules, {"_winapi": winapi,
@@ -45,6 +45,32 @@ class WindowedLoggingTests(unittest.TestCase):
                 finally:
                     streams.stdout.close()
                     streams.stderr.close()
+
+    def test_windowed_reader_recovers_inherited_stdin(self):
+        import ast
+        import os
+        import sys
+        from types import SimpleNamespace
+        source = Path(__file__).resolve().parents[1] / "xiaoa_backend.py"
+        node = next(node for node in ast.parse(source.read_text(encoding="utf-8")).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "_ensure_stdio")
+        with tempfile.TemporaryFile() as pipe:
+            pipe.write(b'{"id":1}\n')
+            pipe.seek(0)
+            streams = SimpleNamespace(stdin=None, stdout=sys.stdout, stderr=sys.stderr)
+            winapi = SimpleNamespace(GetCurrentProcess=lambda: 1,
+                GetStdHandle=lambda identifier: pipe.fileno() if identifier == -10 else 0,
+                DuplicateHandle=lambda *args: pipe.fileno(), DUPLICATE_SAME_ACCESS=2)
+            namespace = {"os": SimpleNamespace(name="nt", O_RDONLY=os.O_RDONLY),
+                         "sys": streams, "Path": Path}
+            with patch.dict(sys.modules, {"_winapi": winapi,
+                    "msvcrt": SimpleNamespace(open_osfhandle=lambda handle, flags: os.dup(handle))}):
+                exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
+                namespace["_ensure_stdio"]()
+            try:
+                self.assertEqual(streams.stdin.readline(), '{"id":1}\n')
+            finally:
+                streams.stdin.close()
 
     def test_windowed_entry_falls_back_when_parent_handles_are_missing_or_invalid(self):
         import ast
@@ -61,7 +87,7 @@ class WindowedLoggingTests(unittest.TestCase):
                 winapi = SimpleNamespace(GetCurrentProcess=lambda: 1,
                     GetStdHandle=lambda identifier: handle, DuplicateHandle=duplicate,
                     DUPLICATE_SAME_ACCESS=2)
-                streams = SimpleNamespace(stdout=None, stderr=None)
+                streams = SimpleNamespace(stdin=object(), stdout=None, stderr=None)
                 namespace = {"os": SimpleNamespace(name="nt", O_WRONLY=os.O_WRONLY,
                     environ={"XIAOA_HOME": directory}), "sys": streams, "Path": Path}
                 with patch.dict(sys.modules, {"_winapi": winapi, "msvcrt": SimpleNamespace()}):

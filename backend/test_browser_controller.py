@@ -76,6 +76,28 @@ class StaleOnceBrowser(FakeBrowser):
 
 
 class BrowserControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_loopback_http_client_is_reused_closed_and_recreated(self):
+        browser = BrowserController(Path("."))
+        made = []
+        def make(**options):
+            self.assertIs(options["trust_env"], False)
+            client = factory(transport=browser_module.httpx.MockTransport(
+                lambda request: browser_module.httpx.Response(200, json={"ok": True})), **options)
+            made.append(client)
+            return client
+        factory = browser_module.httpx.AsyncClient
+        with patch.object(browser_module.httpx, "AsyncClient", side_effect=make):
+            await browser._http("GET", "/json/version", timeout=1)
+            await browser._http("GET", "/json/list", timeout=2)
+            self.assertEqual(1, len(made))
+            await browser.close()
+            self.assertTrue(made[0].is_closed)
+            self.assertIsNone(browser._http_client)
+            await browser._http("GET", "/json/version")
+            self.assertEqual(2, len(made))
+            await browser.close()
+            self.assertTrue(made[1].is_closed)
+
     async def test_tab_actions_accept_plain_text_and_update_state(self):
         for action, body in [("activate", "Target activated"), ("close", "Target is closing")]:
             with self.subTest(action=action):
@@ -97,6 +119,7 @@ class BrowserControllerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("tab-1" if action == "activate" else "", browser._active_target)
                 if action == "close":
                     self.assertEqual({}, browser._refs)
+                await browser.close()
 
     async def test_json_endpoints_still_reject_invalid_json(self):
         browser = BrowserController(Path("."))
@@ -106,6 +129,7 @@ class BrowserControllerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(browser_module.httpx, "AsyncClient", return_value=client):
             with self.assertRaises(json.JSONDecodeError):
                 await browser._http("GET", "/json/version")
+        await browser.close()
 
     async def test_failed_close_does_not_clear_active_target_or_refs(self):
         browser = BrowserController(Path("."))
@@ -119,6 +143,7 @@ class BrowserControllerTests(unittest.IsolatedAsyncioTestCase):
                 await browser.tabs("close", "tab-1")
         self.assertEqual("tab-1", browser._active_target)
         self.assertIn("B1", browser._refs)
+        await browser.close()
 
     async def test_cdp_timeouts_include_method_and_duration(self):
         browser = BrowserController(Path("."))

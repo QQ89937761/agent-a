@@ -67,7 +67,12 @@ if (!hasSingleInstanceLock) {
 
 function lockNavigation(win, allowedFiles = []) {
   const allowed = new Set(allowedFiles.map((file) => path.resolve(file)));
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url === "https://github.com/QQ89937761/agent-a") {
+      shell.openExternal(url).catch(error => console.error("打开 GitHub 失败:", error.message));
+    }
+    return { action: "deny" };
+  });
   win.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith("file://")) return event.preventDefault();
     try {

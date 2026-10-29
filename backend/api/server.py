@@ -1464,6 +1464,10 @@ def _sync_worker_tools(
 
         def make_proxy(tool_name: str):
             async def proxy(**kwargs):
+                if (tool_name == "desktop_execute" and len(kwargs.get("actions", [])) > 1
+                        and not HUB_BRIDGE.supports_desktop_stop):
+                    return {"ok": False, "status": "remote_single_step_required", "completed": 0,
+                            "next": "云端转发每次只执行一步，使用返回的最新观察继续；本机支持1到5步。"}
                 is_media_tool = tool_name in _WORKER_AUTHORITATIVE_CHANNEL_TOOLS
                 channel = CURRENT_CHANNEL.get() if is_media_tool else None
                 attachments = _DESKTOP_REPLY_ATTACHMENTS.get() if is_media_tool else None
@@ -1479,6 +1483,8 @@ def _sync_worker_tools(
                 return result if result.get("offline") else result.get("result", "")
             return proxy
 
+        if name == "desktop_execute":
+            description += "支持任务停止协议的电脑可执行1到5步；旧版本电脑每次限一步。"
         availability_note = "" if available else "（电脑当前离线；开机并连接 worker 后才能使用）"
         REGISTRY.register(Tool(
             name=name, description=description + "(由本地电脑执行)" + availability_note, parameters=parameters,
@@ -1639,14 +1645,24 @@ def _validate_startup_auth() -> None:
 async def _run_worker_tool(tool: str, args: dict) -> Any:
     loop = asyncio.get_running_loop()
     worker_task = asyncio.current_task()
+    from backend.modules.computer.desktop_runtime import request_stop
+    stop = request_stop.get() if tool == "desktop_execute" else None
     notice_token = system_control.set_foreground_notice_callback(
         lambda active: _schedule_foreground_notice(loop, active),
-        on_escape=lambda: loop.call_soon_threadsafe(worker_task.cancel),
+        on_escape=lambda: loop.call_soon_threadsafe(stop or worker_task.cancel),
     )
     try:
         return await REGISTRY.call(tool, args)
     finally:
-        system_control.reset_foreground_notice_callback(notice_token)
+        session = system_control._CONTROL_SESSION.get()
+        try:
+            if tool == "desktop_execute" and session is not None and session.control is not None:
+                # Do not acknowledge a stopped plan while shielded physical input still runs.
+                input_task = session.control.worker
+                if input_task is not None:
+                    await asyncio.gather(input_task, return_exceptions=True)
+        finally:
+            system_control.reset_foreground_notice_callback(notice_token)
 
 
 async def _replace_worker_bridge(*, start: bool = True) -> None:
@@ -1844,6 +1860,8 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(CODE_PROCESS_MANAGER.stop_all)
     if BROWSER_CONTROLLER is not None:
         await BROWSER_CONTROLLER.close()
+    from backend.modules.computer.uia_query import close_readers
+    await close_readers()
     await _close_llm_clients()
 
 

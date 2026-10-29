@@ -142,6 +142,19 @@ class WindowHelpersTests(unittest.TestCase):
         self.assertEqual(computer_module.image_change_ratio(white, white), 0.0)
         self.assertGreater(computer_module.image_change_ratio(white, changed), 0.4)
 
+    def test_uia_snapshot_reports_depth_and_node_caps_as_incomplete(self):
+        leaf = SimpleNamespace(Name="leaf", ControlTypeName="ButtonControl", GetChildren=lambda: [])
+        root = SimpleNamespace(Name="root", ControlTypeName="WindowControl", GetChildren=lambda: [leaf])
+        auto = types.ModuleType("uiautomation")
+        auto.ControlFromHandle = lambda _: root
+        with patch.dict(sys.modules, {"uiautomation": auto}):
+            depth_capped = computer_module._uia_snapshot(9, max_depth=0, limit=20, include_offscreen=False)
+            node_capped = computer_module._uia_snapshot(9, max_depth=36, limit=1, include_offscreen=False)
+            complete = computer_module._uia_snapshot(9, max_depth=36, limit=2, include_offscreen=False)
+        self.assertTrue(depth_capped["truncated"])
+        self.assertTrue(node_capped["truncated"])
+        self.assertFalse(complete["truncated"])
+
     def test_send_reservation_expires(self):
         computer_module._RECENT_SENDS.clear()
         self.assertTrue(computer_module.reserve_send("same", ttl=10, now=1))
@@ -476,6 +489,17 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['visual_fallback'])
         self.assertTrue(process.killed)
 
+    async def test_short_observation_timeout_does_not_change_original_tool_budget(self):
+        process = SimpleNamespace(returncode=None, killed=False)
+        process.poll = lambda: 1 if process.killed else None
+        process.kill = lambda: setattr(process, "killed", True)
+        process.wait = lambda: 1
+        with patch.object(computer_module.subprocess, "Popen", return_value=process):
+            result = await computer_module._inspect_uia_isolated(91, query_timeout=0)
+        self.assertEqual("uia_timeout", result["status"])
+        self.assertTrue(process.killed)
+        self.assertEqual(12.0, computer_module._UIA_QUERY_TIMEOUT)
+
     async def test_isolated_uia_cancel_reaps_query_process(self):
         process = SimpleNamespace(returncode=None, killed=False)
         process.poll = lambda: 1 if process.killed else None
@@ -618,7 +642,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({
             "screen_capture", "screen_capture_region", "inspect_ui_controls", "click_element", "click_coordinate",
             "triple_click", "move_pointer", "scroll_screen", "drag_pointer", "type_text",
-            "wait_for_screen_change", "send_text_to_window", "press_hotkey",
+            "wait_for_screen_change", "send_text_to_window", "press_hotkey", "desktop_observe", "desktop_execute",
         }, set(self.registry.names()))
         await self.registry.call("move_pointer", {"x": 7, "y": 8})
         self.assertIn(("move", 7, 8, 0.2), self.pg.actions)
@@ -1836,7 +1860,7 @@ class ScreenshotCompressionTests(unittest.TestCase):
         source = Path(computer_module.__file__).read_text(encoding="utf-8")
         # Observation images share compression; full and region captures share screenshot_result.
         self.assertIn("observation, _, _ = compress_screenshot(image)", source)
-        self.assertEqual(3, source.count("asyncio.to_thread(screenshot_result, image,"))
+        self.assertEqual(4, source.count("asyncio.to_thread(screenshot_result, image,"))
         self.assertIn("data, width, height = compress_screenshot(image)", source)
 
     def test_compact_fits_compressed_screenshot(self):
