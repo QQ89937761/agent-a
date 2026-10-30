@@ -20,6 +20,10 @@ class VisualContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Shell_TrayWnd是Windows任务栏，不是目标应用窗口", SYSTEM_PROMPT)
         self.assertIn("结合返回的全窗口清单和桌面图定位托盘/主窗口", SYSTEM_PROMPT)
 
+    async def test_desktop_guidance_prohibits_external_input_script_bypass(self):
+        for term in ("code_write/code_run/run_command", "ctypes", "win32gui", "pyautogui", "uiautomation", "不改用外部输入脚本"):
+            self.assertIn(term, SYSTEM_PROMPT)
+
     async def test_pixels_and_explicit_normalized_units_without_guessing_or_clamping(self):
         for answer, expected, invalid in (
             ('{"x":690,"y":850}', None, True),

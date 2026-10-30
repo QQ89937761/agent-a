@@ -48,7 +48,7 @@ def window_identity(window) -> dict:
 
 def same_window(before: dict, after: dict) -> bool:
     return all(before.get(key) == after.get(key) for key in
-               ("handle", "title", "process_id", "class_name", "rect", "minimized"))
+               ("handle", "title", "process_id", "class_name", "rect", "minimized", "hidden"))
 
 
 def matching_controls(controls: list, selector: dict) -> list:
@@ -106,10 +106,11 @@ def validate_plan(actions) -> None:
             raise ValueError("wait_ms必须为0到3000毫秒；按控件条件等待")
 
 
-def register_tools(registry, *, resolve, inventory, inspect, capture, foreground, identity=window_identity):
+def register_tools(registry, *, resolve, inventory, inspect, capture, foreground,
+                   identity=window_identity, candidates=None):
     snapshots = {}
 
-    async def observe(window="", handle=None, include_image=True, include_controls=True):
+    async def observe(window="", handle=None, include_image=True, include_controls=True, activate=False):
         timings = {}
         start = time.perf_counter()
         if interrupted():
@@ -118,8 +119,18 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
         timings["windows_ms"] = round((time.perf_counter() - start) * 1000)
         target = await asyncio.to_thread(resolve, window, handle)
         if target is None:
+            if candidates is not None:
+                try:
+                    extra = await asyncio.to_thread(candidates, window, handle)
+                    seen = {item.get("handle") for item in windows if isinstance(item, dict)}
+                    for item in extra:
+                        if item.get("handle") not in seen:
+                            windows.append(item)
+                            seen.add(item.get("handle"))
+                except Exception:
+                    pass
             result = {"ok": False, "status": "window_missing_or_ambiguous", "windows": windows,
-                      "next": "结合窗口清单和当前桌面定位目标；可能隐藏在托盘或存在同名窗口，不要重复启动、关闭或猜选主窗口。", "timings": timings}
+                      "next": "结合窗口清单和当前桌面定位目标；可能隐藏在托盘或存在同名窗口，先用focus_window恢复已发现主窗口；只有确认未运行才launch_app，不要猜选或关闭窗口。", "timings": timings}
             if include_image and not interrupted():
                 start = time.perf_counter()
                 try:
@@ -131,7 +142,40 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
                     result["image_error"] = type(exc).__name__
                 timings["capture_ms"] = round((time.perf_counter() - start) * 1000)
             return result
+        before_activation = await asyncio.to_thread(identity, target) if activate else None
+        if activate:
+            def activation_failure(status, **extra):
+                return {"ok": False, "status": status, "window": before_activation,
+                        "windows": windows, **extra}
+            control = await system_control.acquire_control(8.0, foreground=False)
+            if control is None:
+                return activation_failure("control_busy")
+            try:
+                if not await system_control.wait_for_user_idle(1.5, 8.0):
+                    return activation_failure("user_active")
+                system_control.activate_foreground(control)
+                try:
+                    await system_control.run_controlled(control, system_control.focus_window_object, target)
+                except Exception as exc:
+                    return activation_failure("input_target_not_focused", error=str(exc)[:300])
+                # A successful activation call alone does not prove foreground ownership.
+                for _ in range(5):
+                    if interrupted():
+                        return activation_failure("interrupted")
+                    if foreground() == before_activation["handle"]:
+                        break
+                    await asyncio.sleep(.1)
+                else:
+                    return activation_failure("input_target_not_focused")
+                target = await asyncio.to_thread(resolve, "", before_activation["handle"])
+                if target is None:
+                    return activation_failure("window_changed")
+            finally:
+                system_control.release_control(control)
         info = await asyncio.to_thread(identity, target)
+        if activate and any(before_activation.get(k) != info.get(k) for k in
+                            ("handle", "title", "process_id", "class_name")):
+            return {"ok": False, "status": "window_changed", "window": before_activation, "windows": windows}
         start = time.perf_counter()
         tree = await inspect(info["handle"]) if include_controls else {"controls": [], "status": "not_requested"}
         timings["uia_ms"] = round((time.perf_counter() - start) * 1000)
@@ -170,16 +214,17 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
 
     @registry.tool(name="desktop_observe", description=(
         "通用桌面观察：一次获取窗口身份、紧凑控件摘要和局部截图，避免重复list_windows/截图。"
-        "window或handle指定唯一窗口，不激活它；相同标题不猜。找不到唯一窗口时同时返回全窗口清单和桌面图，不发执行凭证。返回observation_id、uia/visual路径和分项耗时。"
+        "window或handle指定唯一窗口，默认只读；activate=true经控制权检查唤醒并聚焦后观察，相同标题不猜。找不到唯一窗口时同时返回全窗口清单和桌面图，不发执行凭证。返回observation_id、uia/visual路径和分项耗时。"
         "优先已有文档/网页接口；控件不足用单步视觉工具，不反复读空树。"), parameters={
             "type": "object", "properties": {"window": {"type": "string"}, "handle": {"type": "integer"},
-            "include_image": {"type": "boolean"}, "include_controls": {"type": "boolean"}}})
-    async def desktop_observe(window="", handle=None, include_image=True, include_controls=True):
+            "include_image": {"type": "boolean"}, "include_controls": {"type": "boolean"},
+            "activate": {"type": "boolean", "description": "默认false；true会受控恢复并激活窗口"}}}, side_effect=True)
+    async def desktop_observe(window="", handle=None, include_image=True, include_controls=True, activate=False):
         if not isinstance(window, str) or (handle is not None and (type(handle) is not int or handle <= 0)):
             raise ValueError("window/handle无效")
-        if type(include_image) is not bool or type(include_controls) is not bool:
+        if type(include_image) is not bool or type(include_controls) is not bool or type(activate) is not bool:
             raise ValueError("观察选项必须为布尔值")
-        return await observe(window, handle, include_image, include_controls)
+        return await observe(window, handle, include_image, include_controls, activate)
 
     @registry.tool(name="desktop_execute", description=(
         "执行1到5个已知短步骤，每步重新检查唯一控件和窗口身份；界面/焦点变化、歧义、失败或插话立即停止。"

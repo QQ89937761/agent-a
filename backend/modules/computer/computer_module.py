@@ -156,13 +156,14 @@ def _window_region(window: Any, bounds: tuple[int, int, int, int]) -> tuple[int,
 
 
 def _uia_control_entries(
-    handle: int, *, max_depth: int = 36, limit: int = 2500, stats: dict | None = None,
+    handle: int, *, max_depth: int = 36, limit: int = 2500, stats: dict | None = None, timeout: float = 1.5,
 ) -> list[tuple[Any, int]]:
     """Read a bounded UIA subtree without activating the target window."""
     if not handle:
         return []
     try:
         import uiautomation as auto
+        deadline = time.monotonic() + max(0.01, float(timeout))
         root = auto.ControlFromHandle(handle)
         queue = deque([(root, 0)])
         entries: list[tuple[Any, int]] = []
@@ -173,6 +174,11 @@ def _uia_control_entries(
         max_depth = max(0, min(int(max_depth), 36))
         limit = max(1, min(int(limit), 2500))
         while queue and len(entries) < limit:
+            system_control.check_foreground_permission()
+            if time.monotonic() >= deadline:
+                if stats is not None:
+                    stats["truncated"] = True
+                return entries if stats is not None else []
             control, depth = queue.popleft()
             entries.append((control, depth))
             if depth < max_depth or stats is not None:
@@ -186,15 +192,17 @@ def _uia_control_entries(
                     queue.extend((child, depth + 1) for child in children)
                 elif children and stats is not None:
                     stats["truncated"] = True
-        if queue and stats is not None:
+        incomplete = bool(queue) or time.monotonic() >= deadline
+        if incomplete and stats is not None:
             stats["truncated"] = True
-        return entries
+        return entries if stats is not None or not incomplete else []
     except Exception:
+        system_control.check_foreground_permission()
         return []
 
 
-def _uia_controls(handle: int) -> list[Any]:
-    return [control for control, _depth in _uia_control_entries(handle)]
+def _uia_controls(handle: int, *, stats: dict | None = None) -> list[Any]:
+    return [control for control, _depth in _uia_control_entries(handle, stats=stats)]
 
 
 def _uia_attr(control: Any, name: str, default: Any = None) -> Any:
@@ -307,10 +315,10 @@ def inspect_ui_worker(result_file: str, options: str) -> None:
     Path(result_file).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
 
 
-def _semantic_text_input(handle: int) -> Any | None:
+def _semantic_text_input(handle: int, *, controls: list | None = None) -> Any | None:
     """返回 UIA 暴露的最可能聊天输入框。"""
     candidates = []
-    for control in _uia_controls(handle):
+    for control in (_uia_controls(handle) if controls is None else controls):
         type_name = str(_uia_attr(control, "ControlTypeName", "") or "")
         name = str(_uia_attr(control, "Name", "") or "").lower()
         if type_name == "EditControl" or (
@@ -457,8 +465,9 @@ def _uia_click_named_control(
         "TreeItemControl", "TabItemControl", "CheckBoxControl", "RadioButtonControl",
         "ComboBoxControl", "EditControl", "DataItemControl",
     }
+    controls = _uia_controls(handle)
     matches = []
-    for control in _uia_controls(handle):
+    for control in controls:
         type_name = str(_uia_attr(control, "ControlTypeName", "") or "")
         name = str(_uia_attr(control, "Name", "") or "").strip()
         label = normalize(name)
@@ -474,11 +483,13 @@ def _uia_click_named_control(
         except Exception:
             continue
         if wanted_automation_id and current_automation_id == wanted_automation_id:
-            matches.append((control, name, type_name, True))
+            matches.append((control, name, type_name, 3))
         elif target and label == target:
-            matches.append((control, name, type_name, True))
+            matches.append((control, name, type_name, 3))
+        elif target and len(target) >= 2 and target in label:
+            matches.append((control, name, type_name, 2))
         elif target and len(label) >= 2 and label in target:
-            matches.append((control, name, type_name, False))
+            matches.append((control, name, type_name, 1))
 
     if not wanted_type:
         # The flattened UIA tree includes list labels and combo editors. Only
@@ -503,8 +514,8 @@ def _uia_click_named_control(
             return False
         matches = [item for item in matches if not nested_label(item)]
 
-    exact = [item for item in matches if item[3]]
-    candidates = exact or matches
+    best = max((item[3] for item in matches), default=0)
+    candidates = [item for item in matches if item[3] == best]
     if len(candidates) != 1:
         if not strict:
             return None
@@ -614,8 +625,16 @@ def _uia_select_named_control(
         "ListItemControl", "DataItemControl", "TreeItemControl", "TabItemControl",
         "ButtonControl", "CustomControl", "HyperlinkControl",
     }
+    stats = {"truncated": False}
+    controls = _uia_controls(handle, stats=stats)
+    useful_types = selectable_types | {"EditControl", "DocumentControl", "ComboBoxControl"}
+    tree_unusable = bool(stats.get("truncated")) or not any(
+        str(_uia_attr(control, "ControlTypeName", "") or "") in useful_types
+        and not bool(_uia_attr(control, "IsOffscreen", False))
+        for control in controls
+    )
     matches = []
-    for control in _uia_controls(handle):
+    for control in controls:
         type_name = str(_uia_attr(control, "ControlTypeName", "") or "")
         name = str(_uia_attr(control, "Name", "") or "").strip()
         label = normalize(name)
@@ -625,8 +644,17 @@ def _uia_select_named_control(
             continue
         if label == target:
             matches.append((control, name, type_name))
+        elif len(target) >= 2 and target in label:
+            matches.append((control, name, type_name))
         elif len(label) >= 2 and label in target:
             matches.append((control, name, type_name))
+
+    if tree_unusable:
+        return {
+            "ok": False, "status": "uia_selection_unavailable", "control_mode": "uia",
+            "target": target_desc[:200], "uia_tree_unusable": True,
+            "error": "UI Automation 控件树为空或读取不完整，未据此选择目标；可在当前窗口状态稳定后走受控视觉核验。",
+        }
 
     # Codex exposes a conversation as a ListItem wrapper containing the real
     # clickable ButtonControl. Prefer the uniquely actionable exact match so
@@ -655,12 +683,14 @@ def _uia_select_named_control(
         except Exception:
             pass
 
-    candidates = exact if exact else matches
+    contained = [item for item in matches if target in normalize(item[1])]
+    candidates = exact or contained or matches
     if len(candidates) != 1:
         return {
             "ok": False,
-            "status": "uia_target_not_found" if not candidates else "uia_target_ambiguous",
+            "status": "uia_selection_unavailable" if tree_unusable else ("uia_target_not_found" if not candidates else "uia_target_ambiguous"),
             "control_mode": "uia",
+            "uia_tree_unusable": tree_unusable,
             "target": target_desc[:200],
             "matches": [
                 {"name": name[:120], "control_type": type_name[:80]}
@@ -693,6 +723,7 @@ def _uia_select_named_control(
                 }
             return {
                 "ok": True, "status": "target_selected", "control_mode": "uia",
+                "requires_visual_confirmation": normalize(name) != target,
                 "target": name[:200], "control_type": type_name[:80],
             }
 
@@ -707,6 +738,7 @@ def _uia_select_named_control(
             invoke_method()
             return {
                 "ok": True, "status": "target_selected", "control_mode": "uia",
+                "requires_visual_confirmation": normalize(name) != target,
                 "target": name[:200], "control_type": type_name[:80],
                 "action": "invoke",
             }
@@ -738,13 +770,14 @@ def _uia_background_send(handle: int, text: str, submit_key: str) -> dict[str, A
     mutated = False
     try:
         import uiautomation as auto
-        input_control = _semantic_text_input(handle)
+        controls = _uia_controls(handle)
+        input_control = _semantic_text_input(handle, controls=controls)
         if input_control is None:
             return {"available": False, "reason": "窗口未暴露 UIA 输入控件"}
         send_control = None
         if submit_key != "none":
             buttons = []
-            for control in _uia_controls(handle):
+            for control in controls:
                 if str(_uia_attr(control, "ControlTypeName", "") or "") != "ButtonControl":
                     continue
                 name = str(_uia_attr(control, "Name", "") or "").strip().lower()
@@ -856,7 +889,8 @@ async def locate_in_image(
 
 async def confirm_destination_in_image(
     llm: LLMClient, image_bytes: bytes, destination: str, sent_text: str | None = None,
-    *, diagnostics: dict[str, str] | None = None,
+    *, diagnostics: dict[str, str] | None = None, input_desc: str = "",
+    input_target: dict[str, Any] | None = None,
 ) -> bool:
     """Confirm the active conversation and, optionally, an outgoing message."""
     prompt = (
@@ -871,6 +905,12 @@ async def confirm_destination_in_image(
             "仅画面变化、加载动画或输入框清空不能确认发送；看不清、失败提示或无法证明为 false。"
             f"发送正文：{json.dumps(sent_text, ensure_ascii=False)}。"
         )
+    elif input_desc:
+        prompt += (
+            f"如果 confirmed 为 true 且能唯一看见{input_desc}，可在同一个 JSON 中附带其中心像素坐标；"
+            '格式为 {"confirmed":true,"input_x":整数,"input_y":整数,"coordinate_space":"pixels"}。'
+            "confirmed 为 false 时不要提供坐标；坐标超出图像范围或不是整数将被忽略。"
+        )
     try:
         result = (await llm.vision(prompt, image_bytes)).strip()
         if result.startswith("```"):
@@ -878,7 +918,13 @@ async def confirm_destination_in_image(
         parsed = json.loads(result)
         if not isinstance(parsed, dict) or not isinstance(parsed.get("confirmed"), bool):
             raise ValueError("视觉核验结果不是 confirmed 布尔值")
-        return parsed["confirmed"]
+        confirmed = parsed["confirmed"]
+        if confirmed and sent_text is None and input_desc and input_target is not None:
+            x, y = parsed.get("input_x"), parsed.get("input_y")
+            if (parsed.get("coordinate_space") == "pixels" and type(x) is int and type(y) is int and
+                    0 <= x < input_target.get("width", 0) and 0 <= y < input_target.get("height", 0)):
+                input_target.update(x=x, y=y, coordinate_space="pixels")
+        return confirmed
     except Exception as exc:
         if diagnostics is not None:
             diagnostics["verification_error"] = type(exc).__name__
@@ -980,12 +1026,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
     import pyautogui
     from backend.modules.computer import system_control
 
-    pyautogui.FAILSAFE = True  # 鼠标猛推到左上角可紧急中止
+    # Screen corners are valid targets; controlled actions still check the lease.
+    pyautogui.FAILSAFE = False
     if not getattr(pyautogui.failSafeCheck, "_desktop_permission_guard", False):
-        original_failsafe = pyautogui.failSafeCheck
         def guarded_failsafe():
             system_control.check_foreground_permission()
-            original_failsafe()
+            # Corners are valid desktop targets; Esc and the controlled lease stop input.
         guarded_failsafe._desktop_permission_guard = True
         pyautogui.failSafeCheck = guarded_failsafe
     get_llm = llm if callable(llm) else lambda: llm
@@ -1138,6 +1184,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
     async def _verify_destination(
         region: tuple[int, int, int, int], destination: str, *,
         sent_text: str | None = None, timeout: float = 5.0, attempts: int = 3,
+        input_desc: str = "",
     ) -> tuple[bool, dict[str, Any], dict[str, str]]:
         # Only re-observe: never submit or paste again while waiting for the UI.
         deadline = time.monotonic() + timeout
@@ -1145,6 +1192,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         checked_images: set[tuple] = set()
         confirmed = False
         diagnostics: dict[str, str] = {}
+        input_target: dict[str, Any] = {}
         for attempt in range(attempts):
             if attempt:
                 remaining = deadline - time.monotonic()
@@ -1170,8 +1218,10 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             # UI settling budget excludes vision latency; a slow gateway must
             # not consume the chance to capture the later outgoing bubble.
             started = time.monotonic()
+            input_target = {"width": width, "height": height}
             confirmed = await confirm_destination_in_image(
                 client, observation, destination, sent_text=sent_text, diagnostics=diagnostics,
+                input_desc=input_desc if sent_text is None else "", input_target=input_target,
             )
             deadline += time.monotonic() - started
             if confirmed:
@@ -1184,6 +1234,15 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 "_observation_image": base64.b64encode(observation).decode("ascii"),
                 "observation_size": {"width": width, "height": height},
             }
+            if confirmed and input_target.get("coordinate_space") == "pixels":
+                geometry = {"origin": {"x": region[0], "y": region[1]},
+                            "source_size": {"width": image.width, "height": image.height},
+                            "observation_size": {"width": width, "height": height}}
+                try:
+                    payload["input_point"] = observation_to_desktop(input_target["x"], input_target["y"], geometry)
+                    payload["input_observation_hash"] = hashlib.sha256(observation).hexdigest()
+                except (KeyError, ValueError, TypeError):
+                    pass
             try:
                 payload["path"] = save_screenshot_file(observation)
                 payload = remember_screenshot(payload, image, *region[:2])
@@ -1269,7 +1328,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
 
         target_window = None
         if window.strip() or handle is not None:
-            target_window = system_control.resolve_window(gw, window, handle)
+            target_window = system_control.resolve_window(gw, window, handle, unique=True)
             if target_window is None:
                 return {"ok": False, "status": "window_not_found", "error": f"没找到窗口：{window or handle}"}
             handle_value = int(getattr(target_window, "_hWnd", 0) or 0)
@@ -1339,7 +1398,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 import pygetwindow as gw
             except ImportError:
                 return {"ok": False, "status": "unavailable", "error": "缺少 pygetwindow"}
-            target_window = system_control.resolve_window(gw, window, handle)
+            target_window = system_control.resolve_window(gw, window, handle, unique=True)
             if target_window is None:
                 return {"ok": False, "status": "window_not_found", "error": f"没找到窗口：{window or handle}"}
             target_handle = int(getattr(target_window, "_hWnd", 0) or 0)
@@ -1770,7 +1829,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         except ImportError:
             return {"ok": False, "status": "unavailable", "error": "缺少 pygetwindow"}
 
-        target = system_control.resolve_window(gw, window, handle)
+        target = system_control.resolve_window(gw, window, handle, unique=True)
         if target is None:
             return {"ok": False, "status": "window_not_found", "error": f"没找到窗口：{window or handle}"}
         target_handle = int(getattr(target, "_hWnd", 0) or 0)
@@ -1818,15 +1877,20 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                     "duplicate_suppressed": True, "window": system_control.window_info(target),
                 }
             reserved = True
+            uia_tree_unusable = False
 
             if destination.strip():
                 selected = await system_control.run_controlled(
                     control, _uia_select_named_control,
                     target_handle, destination, destination_control_type,
                 )
-                if not selected.get("ok") and allow_visual_fallback and selected.get("status") in {
-                    "uia_target_not_found", "uia_selection_unavailable",
-                }:
+                uia_tree_unusable = bool(selected.get("uia_tree_unusable"))
+                if selected.get("requires_visual_confirmation") and not allow_visual_fallback:
+                    selected = {"ok": False, "status": "uia_target_unconfirmed",
+                                "error": "模糊匹配仅用于导航；未独立确认会话标题，未输入或发送。"}
+                if allow_visual_fallback and (selected.get("requires_visual_confirmation") or
+                        (not selected.get("ok") and selected.get("status") in {
+                            "uia_target_not_found", "uia_selection_unavailable"})) :
                     if not await system_control.wait_for_user_idle(1.5, 8.0):
                         return {"ok": False, "status": "user_active", "sent": False, "error": "你正在使用电脑，未选择或发送"}
                     system_control.activate_foreground(control)
@@ -1836,9 +1900,14 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                         region = _window_region(target, await _screen_bounds())
                     except Exception as e:
                         return {"ok": False, "status": "window_unavailable", "sent": False, "error": str(e)[:300]}
+                    # Bind optional points to the native identity captured before vision.
+                    input_window = window_identity(target)
                     # Detached/current chats may have no selectable contact item at all.
-                    confirmed, observation, diagnostics = await _verify_destination(region, destination, attempts=1)
-                    selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics}
+                    confirmed, observation, diagnostics = await _verify_destination(
+                        region, destination, attempts=1, input_desc=input_desc,
+                    )
+                    selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics,
+                                "uia_tree_unusable": uia_tree_unusable}
                     if not confirmed and not diagnostics:
                         coords = await _locate_in_region(
                             region, f"唯一匹配的会话/联系人 {json.dumps(destination, ensure_ascii=False)}；有多个同名候选或看不清时返回未找到",
@@ -1846,9 +1915,20 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                         if isinstance(coords, dict):
                             return {**coords, "sent": False, "verified": False}
                         if await system_control.wait_for_user_idle(1.5, 8.0):
+                            before_click = await _capture(region)
+                            # Navigation can expose a different tree; do not cache an empty tree across it.
+                            uia_tree_unusable = False
                             await system_control.run_controlled(control, pyautogui.click, *coords)
-                            confirmed, observation, diagnostics = await _verify_destination(region, destination, timeout=verify_timeout)
-                            selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics}
+                            await wait_for_change(
+                                _capture_image, before_click, region,
+                                min(1.2, verify_timeout), 0.002,
+                            )
+                            input_window = window_identity(target)
+                            confirmed, observation, diagnostics = await _verify_destination(
+                                region, destination, timeout=verify_timeout, input_desc=input_desc,
+                            )
+                            selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics,
+                                        "uia_tree_unusable": uia_tree_unusable}
                 if not selected.get("ok"):
                     _RECENT_SENDS.pop(fingerprint, None)
                     return {
@@ -1869,8 +1949,10 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                         "error": selected.get("error", "未确认目标会话，未输入或发送。"),
                     }
 
-            background = await system_control.run_controlled(control, _uia_background_send,
-                                                             target_handle, text, submit_key)
+            background = ({"available": False, "reason": "UIA 目标树不可用，本次调用已直接转受控视觉路径"}
+                          if uia_tree_unusable else
+                          await system_control.run_controlled(control, _uia_background_send,
+                                                              target_handle, text, submit_key))
             if background.get("available"):
                 verified = bool(background.get("verified"))
                 action_started = True
@@ -1934,14 +2016,36 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 region = _window_region(target, await _screen_bounds())
             except Exception as e:
                 return {"ok": False, "status": "window_unavailable", "sent": False, "error": str(e)[:300]}
-            semantic_input = await system_control.run_controlled(control, _focus_semantic_text_input,
-                                                                 target_handle)
+            semantic_input = (False if uia_tree_unusable else
+                              await system_control.run_controlled(control, _focus_semantic_text_input,
+                                                                  target_handle))
             if not semantic_input:
-                coords = await _locate_in_region(region, input_desc)
-                if isinstance(coords, dict):
-                    return {**coords, "sent": False, "verified": False}
-                if not await system_control.wait_for_user_idle(1.5, 8.0):
-                    return {"ok": False, "status": "user_active", "sent": False, "error": "定位期间你开始使用电脑，已取消发送"}
+                coords = selected.get("input_point") if selected.get("ok") else None
+                evidence_hash = selected.get("input_observation_hash") if selected.get("ok") else None
+                if coords and evidence_hash:
+                    if not await system_control.wait_for_user_idle(1.5, 8.0):
+                        return {"ok": False, "status": "user_active", "sent": False,
+                                "error": "定位期间你开始使用电脑，已取消发送"}
+                if coords and evidence_hash:
+                    current_target = system_control.resolve_window(gw, handle=target_handle, unique=True)
+                    if (current_target is None or _foreground_window_handle() != target_handle or
+                            not same_window(input_window, window_identity(current_target))):
+                        return {"ok": False, "status": "window_changed", "sent": False,
+                                "error": "目标窗口身份、位置或焦点已变化，未复用坐标或输入；请重新观察。"}
+                if coords and evidence_hash:
+                    # Reuse only an unchanged, same-call observation; navigation or
+                    # rendering changes invalidate the model's point.
+                    current_image = await _capture(region)
+                    current_data, _current_width, _current_height = compress_screenshot(current_image)
+                    if (current_image.size != (region[2], region[3]) or not current_data or
+                            hashlib.sha256(current_data).hexdigest() != evidence_hash):
+                        coords = None
+                if coords is None:
+                    coords = await _locate_in_region(region, input_desc)
+                    if isinstance(coords, dict):
+                        return {**coords, "sent": False, "verified": False}
+                    if not await system_control.wait_for_user_idle(1.5, 8.0):
+                        return {"ok": False, "status": "user_active", "sent": False, "error": "定位期间你开始使用电脑，已取消发送"}
                 await system_control.run_controlled(control, pyautogui.click, *coords)
 
             action_started = True
@@ -2052,7 +2156,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         target = None
         if window.strip() or handle is not None:
             import pygetwindow as gw
-            target = system_control.resolve_window(gw, window, handle)
+            target = system_control.resolve_window(gw, window, handle, unique=True)
             if target is None:
                 return {"ok": False, "status": "input_target_missing", "error": "目标窗口已关闭或不可用；未发送按键。"}
             handle = int(target._hWnd)
@@ -2084,24 +2188,24 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
 
 
     # Unified desktop tools reuse the exact registered input/permission paths.
-    from backend.modules.computer.desktop_runtime import register_tools as register_desktop_tools, window_identity
+    from backend.modules.computer.desktop_runtime import register_tools as register_desktop_tools, window_identity, same_window
 
     def desktop_resolve(window, handle):
         import pygetwindow as gw
-        windows = list(gw.getAllWindows())
-        if handle is not None:
-            return next((w for w in windows if int(getattr(w, "_hWnd", 0)) == handle), None)
-        if not window:
-            return next((w for w in windows if int(getattr(w, "_hWnd", 0)) == _foreground_window_handle()), None)
-        queries = system_control.window_queries(window)
-        exact = [w for w in windows if str(getattr(w, "title", "")).strip().lower() in queries]
-        matches = exact or [w for w in windows if any(q in str(getattr(w, "title", "")).lower() for q in queries)]
-        return matches[0] if len(matches) == 1 else None
+        if not window and handle is None:
+            handle = _foreground_window_handle()
+        return system_control.resolve_window(gw, window, handle, unique=True)
 
     def desktop_inventory():
         import pygetwindow as gw
         windows = [w for w in gw.getAllWindows() if str(getattr(w, "title", "")).strip()][:30]
         return [window_identity(w) for w in windows]
+
+    def desktop_candidates(window, handle=None):
+        import pygetwindow as gw
+        return [window_identity(w) for w in system_control.find_hidden_main_windows(
+            gw, window, handle, exact=False,
+        )]
 
     from backend.modules.computer.uia_query import UIAReader
     uia_reader = UIAReader()
@@ -2122,7 +2226,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         x, y = max(left, rect["x"]), max(top, rect["y"])
         width = min(right, rect["x"] + rect["width"]) - x
         height = min(bottom, rect["y"] + rect["height"]) - y
-        if info["minimized"] or width <= 0 or height <= 0:
+        if info["minimized"] or info.get("hidden") or width <= 0 or height <= 0:
             return {"image_status": "window_not_visible", "image_note": "窗口最小化或不在可见屏幕，不截图猜测；先focus_window。"}
         image = await _capture((x, y, width, height))
         result = await asyncio.to_thread(screenshot_result, image, "桌面目标窗口观察", "auto")
@@ -2131,4 +2235,5 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         return result
 
     register_desktop_tools(registry, resolve=desktop_resolve, inventory=desktop_inventory,
-                           inspect=desktop_inspect, capture=desktop_capture, foreground=_foreground_window_handle)
+                           candidates=desktop_candidates, inspect=desktop_inspect,
+                           capture=desktop_capture, foreground=_foreground_window_handle)

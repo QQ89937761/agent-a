@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from backend.core.agent import Agent, _looks_dangerous, _looks_financial, _looks_remote_confirmation
+from backend.core.agent import Agent, _looks_dangerous, _looks_financial, _looks_remote_confirmation, _is_read_only_operation, _is_spinning
 from backend.core.config import AgentConfig
 from backend.core.tools import ToolRegistry
 from backend.modules.computer import desktop_runtime as runtime
@@ -97,6 +97,29 @@ class DesktopRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(runtime, "interrupted", return_value=True):
             self.assertEqual("interrupted", (await self.observe())["status"])
         self.assertEqual(1, capture.await_count)
+
+    async def test_activation_exception_returns_context_without_token(self):
+        with patch.object(runtime.system_control, "acquire_control", new=AsyncMock(return_value=object())), \
+             patch.object(runtime.system_control, "wait_for_user_idle", new=AsyncMock(return_value=True)), \
+             patch.object(runtime.system_control, "activate_foreground"), \
+             patch.object(runtime.system_control, "run_controlled", new=AsyncMock(side_effect=RuntimeError("focus failed"))), \
+             patch.object(runtime.system_control, "release_control"):
+            result = await self.observe(activate=True)
+        self.assertEqual("input_target_not_focused", result["status"])
+        self.assertEqual(10, result["window"]["handle"])
+        self.assertTrue(result["windows"])
+        self.assertNotIn("observation_id", result)
+
+    async def test_missing_target_merges_hidden_candidates_without_duplicates(self):
+        self.registry.unregister("desktop_observe")
+        self.registry.unregister("desktop_execute")
+        hidden = {"handle": 99, "title": "Hidden", "process_id": 321, "hidden": True}
+        runtime.register_tools(self.registry, resolve=lambda *_: None, inventory=lambda: [self.info],
+                               candidates=lambda *_: [self.info, hidden, hidden],
+                               inspect=self.inspect, capture=AsyncMock(return_value={}), foreground=lambda: self.active)
+        result = await self.observe(include_image=False)
+        self.assertEqual([10, 99], [item["handle"] for item in result["windows"]])
+        self.assertNotIn("observation_id", result)
 
     async def test_plan_executes_with_one_final_observation_and_preserves_mapping(self):
         observed = await self.observe()
@@ -241,6 +264,32 @@ class DesktopRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         self.assertNotIn("observation_id", result)
 
+    async def test_default_observe_never_acquires_control(self):
+        with patch.object(runtime.system_control, "acquire_control", new=AsyncMock()) as acquire:
+            self.assertTrue((await self.observe())["ok"])
+        acquire.assert_not_awaited()
+
+    async def test_activate_observe_denied_control_never_issues_token(self):
+        with patch.object(runtime.system_control, "acquire_control", new=AsyncMock(return_value=None)):
+            result = await self.observe(activate=True)
+        self.assertEqual("control_busy", result["status"])
+        self.assertNotIn("observation_id", result)
+        self.assertEqual(0, self.queries)
+        self.assertEqual(0, self.captures)
+
+    async def test_activate_observe_focuses_before_inspecting_and_issues_token(self):
+        focus = AsyncMock()
+        with (patch.object(runtime.system_control, "acquire_control", new=AsyncMock(return_value=object())),
+              patch.object(runtime.system_control, "wait_for_user_idle", new=AsyncMock(return_value=True)),
+              patch.object(runtime.system_control, "activate_foreground"),
+              patch.object(runtime.system_control, "run_controlled", new=focus),
+              patch.object(runtime.system_control, "release_control") as release):
+            result = await self.observe(activate=True)
+        self.assertTrue(result["ok"], result)
+        focus.assert_awaited_once()
+        release.assert_called_once()
+        self.assertEqual(10, result["window"]["handle"])
+
     async def test_click_binds_exact_control_and_never_falls_back_to_coordinates(self):
         self.controls = [{"name": "Open", "control_type": "ButtonControl", "automation_id": "open"}]
         action = {"tool": "click_element", "arguments": {"target_desc": "other"}, "expect": {"automation_id": "open"}}
@@ -370,6 +419,82 @@ class DesktopRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([], self.calls)
                 confirm.assert_awaited_once()
                 self.assertEqual(reason, next(e.data["reason"] for e in events if e.type == "confirm_needed"))
+
+    def test_observe_read_only_exemption_requires_literal_false_activation(self):
+        for args in ({"window": "微信"}, {"window": "微信", "activate": False}):
+            self.assertTrue(_is_read_only_operation("desktop_observe", args))
+        for activate in (True, None, 0, 1, "false", "true", [], {}):
+            with self.subTest(activate=activate):
+                self.assertFalse(_is_read_only_operation("desktop_observe", {"activate": activate}))
+
+    async def test_financial_view_is_read_only_but_following_action_still_requires_confirmation(self):
+        for name in (None, "click_element", "desktop_execute", "desktop_observe"):
+            with self.subTest(action=name), tempfile.TemporaryDirectory() as tmp:
+                observe_args = {"window": "微信", "handle": 10, "include_image": False}
+                class LLM:
+                    turn = 0
+                    async def chat_stream_tools(inner, messages, **kwargs):
+                        inner.turn += 1
+                        calls = [("desktop_observe", observe_args)]
+                        if name is not None:
+                            calls.append((name, {**observe_args, "activate": True}
+                                          if name == "desktop_observe" else
+                                          {"target_desc": "Next"} if name == "click_element" else
+                                          {"observation_id": "unused", "actions": [self.action()]}))
+                        if inner.turn == 1:
+                            yield "done", {"role": "assistant", "content": "", "tool_calls": [
+                                {"id": str(i), "type": "function", "function": {
+                                    "name": tool_name, "arguments": json.dumps(args)}}
+                                for i, (tool_name, args) in enumerate(calls)]}
+                        else:
+                            yield "done", {"role": "assistant", "content": "已查看界面"}
+                confirm = AsyncMock(return_value=False)
+                events = [event async for event in Agent(
+                    LLM(), self.registry, AgentConfig(confirm_before_action=True),
+                    confirm_fn=confirm, result_dir=Path(tmp),
+                ).run("帮我看下微信付款界面", approval_mode="risk")]
+                observed = [e for e in events if e.type == "tool_result" and e.data["name"] == "desktop_observe"]
+                self.assertTrue(observed[0].data["ok"])
+                confirmations = [e for e in events if e.type == "confirm_needed"]
+                if name is None:
+                    confirm.assert_not_awaited()
+                    self.assertEqual([], confirmations)
+                else:
+                    confirm.assert_awaited_once()
+                    self.assertEqual(name, confirmations[0].data["name"])
+                    self.assertEqual("financial", confirmations[0].data["reason"])
+                self.assertEqual([], self.calls)
+
+    async def test_repeated_control_only_observations_are_observed_for_spin_detection(self):
+        # Stable observations isolate the classification from changing tokens/timings.
+        self.registry.get("desktop_observe").handler = AsyncMock(return_value={
+            "ok": True, "window": self.info, "controls": self.controls})
+        for activate in (False, True):
+            with self.subTest(activate=activate), tempfile.TemporaryDirectory() as tmp:
+                histories = []
+                class LLM:
+                    turn = 0
+                    async def chat_stream_tools(inner, messages, **kwargs):
+                        inner.turn += 1
+                        if inner.turn <= 4:
+                            yield "done", {"role": "assistant", "content": "", "tool_calls": [{
+                                "id": str(inner.turn), "type": "function", "function": {
+                                    "name": "desktop_observe", "arguments": json.dumps({
+                                        "handle": 10, "include_image": False, "activate": activate})}}]}
+                        else:
+                            yield "done", {"role": "assistant", "content": "停止重复观察"}
+                def check(recent, window=3):
+                    histories.append(list(recent))
+                    return _is_spinning(recent, window)
+                with patch("backend.core.agent._is_spinning", side_effect=check):
+                    events = [event async for event in Agent(
+                        LLM(), self.registry, AgentConfig(), result_dir=Path(tmp),
+                    ).run("查看指定窗口控件", approval_mode="full")]
+                repeated = [history for history in histories if len(history) >= 3]
+                self.assertTrue(repeated)
+                self.assertTrue(any(_is_spinning(history) for history in repeated))
+                self.assertTrue(all(item[3] == "observed" for history in repeated for item in history))
+                self.assertFalse(any(e.type == "error" for e in events))
 
     async def test_observation_does_not_bypass_greeting_screenshot_guard(self):
         class LLM:

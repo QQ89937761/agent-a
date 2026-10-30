@@ -111,7 +111,7 @@ assert.match(toolDescription({name:"cad_erase_entities",danger:true}), /High-ris
 assert.match(toolDescription({name:"excel_write_cells",side_effect:true}), /Changes system state/);
 assert.equal(toolDescription({name:"custom_user_tool"}), "");
 for (const [name, expected] of [
-  ["desktop_observe", "Observe a unique desktop window without activating it"],
+  ["desktop_observe", "Observe a unique desktop window read-only by default"],
   ["desktop_execute", "Execute 1 to 5 known short desktop steps"],
   ["pdf_read_text", "Read PDF text page by page"],
   ["pdf_list_pages", "Check that a PDF exists"],

@@ -17,6 +17,7 @@ import contextvars
 from contextlib import nullcontext
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -173,6 +174,15 @@ class ControlToken:
 
 # 用户叫法和真实窗口标题并不总一致（Codex 桌面版当前显示为 ChatGPT）。
 _WINDOW_ALIASES = {
+    "微信": ("微信", "wechat", "weixin"),
+    "wechat": ("微信", "wechat", "weixin"),
+    "weixin": ("微信", "wechat", "weixin"),
+    "飞书": ("飞书", "feishu", "lark"),
+    "feishu": ("飞书", "feishu", "lark"),
+    "钉钉": ("钉钉", "dingtalk"),
+    "qq": ("qq", "腾讯qq"),
+    "vscode": ("visual studio code", "vscode", "code"),
+    "code": ("visual studio code", "vscode", "code"),
     "wps": ("wps", "wps office", "wps 文字", "wps 表格", "wps 演示"),
     "word": ("word", "microsoft word", "wps 文字", ".docx - wps", ".doc - wps"),
     "excel": ("excel", "microsoft excel", "wps 表格", ".xlsx - wps", ".xls - wps"),
@@ -193,18 +203,138 @@ def window_queries(title: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value.lower() for value in values if value))
 
 
+def window_hidden(window: Any) -> bool:
+    try:
+        import win32gui
+        return bool(win32gui.IsWindow(int(window._hWnd))) and not bool(win32gui.IsWindowVisible(int(window._hWnd)))
+    except Exception:
+        return False
+
+
+_HIDDEN_HELPER_WORDS = (
+    "关于", "about", "输入法", "ime", "updater", "helper", "crash", "notification",
+)
+_KNOWN_WINDOW_PROCESSES = {
+    "微信": {"wechat.exe", "weixin.exe"}, "wechat": {"wechat.exe", "weixin.exe"},
+    "weixin": {"wechat.exe", "weixin.exe"},
+    "飞书": {"feishu.exe", "lark.exe"}, "feishu": {"feishu.exe", "lark.exe"},
+    "钉钉": {"dingtalk.exe"}, "qq": {"qq.exe"},
+    "vscode": {"code.exe"}, "code": {"code.exe"},
+    "wps": {"wps.exe", "et.exe", "wpp.exe"},
+    "word": {"winword.exe"}, "excel": {"excel.exe"}, "ppt": {"powerpnt.exe"},
+    "codex": {"codex.exe", "chatgpt.exe"}, "chatgpt": {"codex.exe", "chatgpt.exe"},
+    "小a": {"xiaoa.exe"}, "xiaoa": {"xiaoa.exe"},
+}
+
+
+def _normal_window_rect(hwnd: int, raw_rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Use rcNormalPosition only for iconic/off-screen geometry checks and reporting."""
+    left, top, right, bottom = raw_rect
+    if right - left >= 180 and bottom - top >= 120 and min(left, top) > -20000:
+        return raw_rect
+    try:
+        import win32gui
+        placement = win32gui.GetWindowPlacement(hwnd)
+        normal = placement[4] if placement and len(placement) > 4 else None
+        if normal and len(normal) == 4:
+            nleft, ntop, nright, nbottom = map(int, normal)
+            if nright - nleft >= 180 and nbottom - ntop >= 120:
+                return nleft, ntop, nright, nbottom
+    except Exception:
+        pass
+    return raw_rect
+
+
+def _hidden_process_matches(title: str, queries: tuple[str, ...], process_name: str) -> bool:
+    normalized_title = re.sub(r"[\W_]+", "", title.casefold())
+    normalized_queries = {re.sub(r"[\W_]+", "", q.casefold()) for q in queries}
+    if normalized_title in normalized_queries:
+        return True
+    known_processes = set()
+    for query in queries:
+        known_processes.update(_KNOWN_WINDOW_PROCESSES.get(query.casefold(), set()))
+    return bool(process_name and process_name.casefold() in known_processes)
+
+
+def find_hidden_main_windows(gw: Any, title: str = "", handle: int | None = None, *, exact: bool = False) -> list[Any]:
+    """Discover only explicitly requested hidden top-level app windows; never activate here."""
+    if handle is None and not title.strip():
+        return []
+    try:
+        import win32gui
+        queries = window_queries(title)
+        matches = []
+        excluded = {"ime", "msctfime ui", "default ime", "base_powermessagewindow",
+                    "wxtrayiconmessagewindow", "systemmessagewindow", "chrome_systemmessagewindow",
+                    "displayicc_systemmessagewindow", "shell_traywnd", "shell_secondarytraywnd",
+                    "progman", "workerw", "tooltips_class32"}
+        def visit(hwnd, _):
+            try:
+                if win32gui.IsWindowVisible(hwnd) or (handle is not None and hwnd != handle):
+                    return
+                name = win32gui.GetWindowText(hwnd).strip()
+                kind = win32gui.GetClassName(hwnd).casefold()
+                if not name or kind in excluded or name.casefold() in excluded:
+                    return
+                lowered_name = name.casefold()
+                if any(word in lowered_name for word in (*_SECONDARY, *_HIDDEN_HELPER_WORDS)):
+                    return
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                normal_left, normal_top, normal_right, normal_bottom = _normal_window_rect(
+                    hwnd, (left, top, right, bottom),
+                )
+                if normal_right - normal_left < 180 or normal_bottom - normal_top < 120:
+                    return
+                window = gw.Window(hwnd)
+                if handle is None:
+                    # Hidden title substring matches are too broad: require an
+                    # exact alias or a known process for the requested app.
+                    process_name = "" if exact else _window_process_name(window)
+                    if not _hidden_process_matches(name, queries, process_name):
+                        return
+                elif int(hwnd) != int(handle):
+                    return
+                matches.append(window)
+            except Exception:
+                return  # A window may disappear during enumeration.
+        win32gui.EnumWindows(visit, None)
+        exact_matches = [w for w in matches if w.title.strip().casefold() in queries]
+        return exact_matches or matches
+    except (ImportError, AttributeError, OSError):
+        return []
+
+
 def window_info(window: Any) -> dict[str, Any]:
     """把 pygetwindow 对象压成有界、可序列化的结果。"""
+    handle = int(getattr(window, "_hWnd", 0) or 0)
+    left = int(getattr(window, "left", 0) or 0)
+    top = int(getattr(window, "top", 0) or 0)
+    width = max(0, int(getattr(window, "width", 0) or 0))
+    height = max(0, int(getattr(window, "height", 0) or 0))
+    minimized = bool(getattr(window, "isMinimized", False))
+    if handle:
+        try:
+            import win32gui
+            raw = tuple(map(int, win32gui.GetWindowRect(handle)))
+            minimized = minimized or min(raw[0], raw[1]) <= -20000 or bool(getattr(win32gui, "IsIconic", lambda _h: False)(handle))
+            normal = _normal_window_rect(handle, raw)
+            if normal != raw and (minimized or min(raw[0], raw[1]) <= -20000):
+                left, top, right, bottom = normal
+                width, height = max(0, right - left), max(0, bottom - top)
+            elif raw:
+                left, top, right, bottom = raw
+                width, height = max(0, right - left), max(0, bottom - top)
+            minimized = minimized or min(left, top) <= -20000
+        except Exception:
+            minimized = minimized or min(left, top) <= -20000
     return {
-        "handle": int(getattr(window, "_hWnd", 0) or 0),
+        "handle": handle,
         "title": str(getattr(window, "title", "") or "")[:300],
         "active": bool(getattr(window, "isActive", False)),
-        "minimized": bool(getattr(window, "isMinimized", False)),
+        "minimized": minimized,
+        "hidden": window_hidden(window),
         "rect": {
-            "x": int(getattr(window, "left", 0) or 0),
-            "y": int(getattr(window, "top", 0) or 0),
-            "width": max(0, int(getattr(window, "width", 0) or 0)),
-            "height": max(0, int(getattr(window, "height", 0) or 0)),
+            "x": left, "y": top, "width": width, "height": height,
         },
     }
 
@@ -299,45 +429,76 @@ def _kill_window_process(window: Any) -> bool:
         return False
 
 
-def resolve_window(gw: Any, title: str = "", handle: int | None = None, *, exact: bool = False) -> Any | None:
+def resolve_window(gw: Any, title: str = "", handle: int | None = None, *, exact: bool = False,
+                   unique: bool = False) -> Any | None:
     """按句柄或标题找窗口；句柄优先，标题支持 Codex -> ChatGPT 等别名。"""
     windows = list(gw.getAllWindows())
     if handle is not None:
-        wanted = int(handle)
-        return next((w for w in windows if int(getattr(w, "_hWnd", 0) or 0) == wanted), None)
-    queries = window_queries(title)
-    if not queries:
+        matches = [w for w in windows if int(getattr(w, "_hWnd", 0) or 0) == handle]
+        matches = matches or find_hidden_main_windows(gw, title, handle, exact=exact)
+    else:
+        queries = window_queries(title)
+        if not queries:
+            return None
+        if unique:
+            matches = [w for w in windows if str(w.title).strip().casefold() in queries]
+            if not matches and not exact:
+                matches = [w for w in windows if any(q in str(w.title).casefold() for q in queries)]
+            if not matches:
+                matches = find_hidden_main_windows(gw, title, exact=exact)
+            return matches[0] if len(matches) == 1 else None
+        # Preserve query priority and Z-order: do not aggregate aliases before
+        # choosing a result, which is important for multi-window applications.
+        matches = []
+        for query in queries:
+            matches = [w for w in windows if str(w.title).strip().casefold() == query]
+            if matches:
+                break
+        if not matches and not exact:
+            for query in queries:
+                matches = [w for w in windows if query in str(w.title).casefold()]
+                if matches:
+                    break
+        if not matches:
+            matches = find_hidden_main_windows(gw, title, exact=exact)
+    if unique and len(matches) != 1:
         return None
-    titled = [(w, str(getattr(w, "title", "") or "").strip().lower()) for w in windows]
-    # 精确标题始终优先，防止“微信”误中“微信设置”。
-    for query in queries:
-        found = next((w for w, candidate in titled if candidate == query), None)
-        if found is not None:
-            return found
-    if exact:
-        return None
-    for query in queries:
-        found = next((w for w, candidate in titled if query in candidate), None)
-        if found is not None:
-            return found
-    return None
+    return matches[0] if matches else None
 
 
 def focus_window_object(window: Any, *, maximize: bool = False) -> dict[str, Any]:
-    """优先用 Windows UIA 聚焦，失败再走 pygetwindow。"""
+    """Restore the native window before UIA focus; semantic focus alone is not foreground proof."""
     semantic = False
     handle = int(getattr(window, "_hWnd", 0) or 0)
+    if handle and window_hidden(window):
+        import win32gui
+        import win32con
+        check_foreground_permission()
+        win32gui.ShowWindow(handle, win32con.SW_SHOW)
+        check_foreground_permission()
+        win32gui.ShowWindow(handle, win32con.SW_RESTORE)
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline and not win32gui.IsWindowVisible(handle):
+            check_foreground_permission()
+            time.sleep(0.05)
+    if bool(getattr(window, "isMinimized", False)):
+        window.restore()
     if handle:
         try:
             import uiautomation as auto
+            check_foreground_permission()
             control = auto.ControlFromHandle(handle)
             control.SetFocus()
             semantic = True
         except Exception:
-            pass
-    if bool(getattr(window, "isMinimized", False)):
-        window.restore()
-    window.activate()
+            check_foreground_permission()
+    check_foreground_permission()
+    try:
+        window.activate()
+    except Exception:
+        import win32gui
+        if not handle or int(win32gui.GetForegroundWindow()) != handle:
+            raise
     if maximize:
         window.maximize()
     return {"focused": True, "semantic": semantic, "window": window_info(window)}
@@ -708,6 +869,8 @@ def register_tools(registry: ToolRegistry) -> None:
             windows.append(window_info(window))
             if len(windows) >= limit:
                 break
+        if not windows and title.strip():
+            windows = [window_info(w) for w in find_hidden_main_windows(gw, title)[:limit]]
         return {"ok": True, "count": len(windows), "windows": windows}
 
     @registry.tool(

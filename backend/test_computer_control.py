@@ -106,6 +106,145 @@ class FakeLLM:
 
 
 class WindowHelpersTests(unittest.TestCase):
+    def test_minimized_hidden_window_uses_normal_placement_geometry(self):
+        window = FakeWindow("微信", 201, (-25600, -25600, 159, 27))
+        windows = {201: window}
+        gui = types.ModuleType("win32gui")
+        gui.IsWindow = lambda h: True
+        gui.IsWindowVisible = lambda h: False
+        gui.IsIconic = lambda h: True
+        gui.GetWindowText = lambda h: windows[h].title
+        gui.GetClassName = lambda h: "WeChatMainWndForPC"
+        gui.GetWindowRect = lambda h: (-25600, -25600, -25441, -25573)
+        gui.GetWindowPlacement = lambda h: (0, 2, (0, 0, 0, 0), (0, 0), (370, 60, 1136, 686))
+        gui.EnumWindows = lambda callback, arg: [callback(h, arg) for h in windows]
+        gw = fake_window_module([])
+        gw.Window = lambda h: windows[h]
+        with patch.dict(sys.modules, {"win32gui": gui}):
+            self.assertEqual([201], [item._hWnd for item in system_control.find_hidden_main_windows(gw, "微信")])
+            info = system_control.window_info(window)
+        self.assertTrue(info["minimized"])
+        self.assertEqual({"x": 370, "y": 60, "width": 766, "height": 626}, info["rect"])
+
+    def test_hidden_helper_titles_and_unknown_substrings_are_not_main_windows(self):
+        windows = {1: FakeWindow("微信输入法-关于", 1, (0, 0, 800, 600)),
+                   2: FakeWindow("微信 Workspace", 2, (0, 0, 800, 600)),
+                   3: FakeWindow("微信 settings", 3, (0, 0, 800, 600))}
+        gui = types.ModuleType("win32gui")
+        gui.IsWindowVisible = lambda _: False
+        gui.GetWindowText = lambda h: windows[h].title
+        gui.GetClassName = lambda _: "Main"
+        gui.GetWindowRect = lambda _: (0, 0, 800, 600)
+        gui.EnumWindows = lambda callback, arg: [callback(h, arg) for h in windows]
+        gw = fake_window_module([])
+        gw.Window = lambda h: windows[h]
+        with patch.dict(sys.modules, {"win32gui": gui}), patch.object(
+                system_control, "_window_process_name", return_value="wetype_update.exe"):
+            self.assertEqual([], system_control.find_hidden_main_windows(gw, "微信"))
+            self.assertEqual([], system_control.find_hidden_main_windows(gw, handle=1))
+        with patch.dict(sys.modules, {"win32gui": gui}), patch.object(
+                system_control, "_window_process_name", return_value="wechat.exe"):
+            self.assertIn(windows[2], system_control.find_hidden_main_windows(gw, "微信"))
+            self.assertEqual([], system_control.find_hidden_main_windows(gw, "微信", exact=True))
+
+    def test_default_resolver_preserves_z_order_while_unique_rejects_alias_ties(self):
+        first, second = FakeWindow("微信", 301), FakeWindow("WeChat", 302)
+        gw = fake_window_module([first, second])
+        self.assertIs(first, system_control.resolve_window(gw, "微信"))
+        self.assertIsNone(system_control.resolve_window(gw, "微信", unique=True))
+        gw.getAllWindows = lambda: [first, FakeWindow("微信", 303)]
+        self.assertIs(first, system_control.resolve_window(gw, "微信"))
+        self.assertIsNone(system_control.resolve_window(gw, "微信", unique=True))
+
+    def test_uia_empty_or_truncated_tree_is_unusable_but_editor_tree_is_not(self):
+        root = SimpleNamespace(ControlTypeName="WindowControl")
+        editor = SimpleNamespace(ControlTypeName="EditControl")
+        for controls, truncated, expected in (([root], False, True), ([root, editor], False, False),
+                                               ([editor], True, True)):
+            def read(_handle, *, stats):
+                stats["truncated"] = truncated
+                return controls
+            with patch.object(computer_module, "_uia_controls", side_effect=read):
+                result = computer_module._uia_select_named_control(88, "target")
+            self.assertEqual(expected, result["uia_tree_unusable"])
+
+    def test_restore_precedes_uia_focus_and_activation_error_requires_real_foreground(self):
+        window = FakeWindow("Test", 301)
+        window.isMinimized = True
+        auto = types.ModuleType("uiautomation")
+        auto.ControlFromHandle = lambda _: SimpleNamespace(SetFocus=lambda: window.calls.append("uia_focus"))
+        gui = types.ModuleType("win32gui")
+        gui.IsWindow = lambda _: False
+        gui.GetForegroundWindow = lambda: 301
+        def activate():
+            window.calls.append("activate")
+            raise RuntimeError("activate failed")
+        window.activate = activate
+        with patch.dict(sys.modules, {"win32gui": gui, "uiautomation": auto}):
+            self.assertTrue(system_control.focus_window_object(window)["focused"])
+            self.assertEqual(["restore", "uia_focus", "activate"], window.calls)
+            gui.GetForegroundWindow = lambda: 999
+            with self.assertRaises(RuntimeError):
+                system_control.focus_window_object(window)
+
+    def test_hidden_main_window_discovery_filters_helpers_and_rejects_duplicates(self):
+        windows = {1: FakeWindow("Hidden app", 1, (20, 30, 800, 600)),
+                   2: FakeWindow("Hidden app", 2, (20, 30, 800, 600)),
+                   3: FakeWindow("Hidden app", 3, (20, 30, 800, 600)),
+                   4: FakeWindow("Hidden app", 4, (20, 30, 10, 10))}
+        gui = types.ModuleType("win32gui")
+        gui.IsWindow = lambda h: h in windows
+        gui.IsWindowVisible = lambda h: False
+        gui.GetWindowText = lambda h: windows[h].title
+        gui.GetClassName = lambda h: "MSCTFIME UI" if h == 3 else "AppMain"
+        gui.GetWindowRect = lambda h: (0, 0, windows[h].width, windows[h].height)
+        gui.EnumWindows = lambda callback, arg: [callback(h, arg) for h in windows]
+        gw = fake_window_module([])
+        gw.Window = lambda h: windows[h]
+        with patch.dict(sys.modules, {"win32gui": gui}):
+            found = system_control.find_hidden_main_windows(gw, "Hidden app")
+            self.assertEqual([1, 2], [w._hWnd for w in found])
+            self.assertIs(windows[1], system_control.resolve_window(gw, "Hidden app"))
+            self.assertIsNone(system_control.resolve_window(gw, "Hidden app", unique=True))
+            self.assertIs(windows[1], system_control.resolve_window(gw, handle=1))
+            self.assertTrue(system_control.window_info(windows[1])["hidden"])
+            visible = FakeWindow("Hidden app", 10)
+            gw.getAllWindows = lambda: [visible]
+            self.assertIs(visible, system_control.resolve_window(gw, "Hidden app"))
+            self.assertEqual([], system_control.find_hidden_main_windows(gw))
+
+    def test_hidden_restore_uses_native_show_without_relaunch(self):
+        window = FakeWindow("Hidden app", 1, (0, 0, 800, 600))
+        visible = []
+        gui = types.ModuleType("win32gui")
+        gui.IsWindow = lambda h: True
+        gui.IsWindowVisible = lambda h: bool(visible)
+        gui.ShowWindow = lambda h, mode: visible.append((h, mode))
+        con = types.ModuleType("win32con")
+        con.SW_SHOW, con.SW_RESTORE = 5, 9
+        auto = types.ModuleType("uiautomation")
+        auto.ControlFromHandle = Mock(side_effect=RuntimeError("no UIA"))
+        with patch.dict(sys.modules, {"win32gui": gui, "win32con": con, "uiautomation": auto}):
+            result = system_control.focus_window_object(window)
+        self.assertEqual([(1, 5), (1, 9)], visible)
+        self.assertEqual(["activate"], window.calls)
+        self.assertFalse(result["window"]["hidden"])
+
+    def test_uia_traversal_budget_rejects_partial_action_candidates(self):
+        leaf = SimpleNamespace(GetChildren=lambda: [])
+        root = SimpleNamespace(GetChildren=lambda: [leaf])
+        auto = types.ModuleType("uiautomation")
+        auto.ControlFromHandle = lambda _: root
+        for stats in (None, {}):
+            with patch.dict(sys.modules, {"uiautomation": auto}), \
+                 patch.object(computer_module.time, "monotonic", side_effect=[0, 0, 2]):
+                entries = computer_module._uia_control_entries(1, stats=stats, timeout=1)
+            if stats is None:
+                self.assertEqual([], entries)
+            else:
+                self.assertTrue(stats["truncated"])
+                self.assertEqual([(root, 0)], entries)
+
     def test_foreground_control_type_hints_resolve(self):
         self.assertIn("return", get_type_hints(computer_module._begin_foreground))
         self.assertIs(system_control.ControlToken, get_type_hints(computer_module._end_foreground)["control"])
@@ -226,6 +365,25 @@ class WindowHelpersTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual("target_selected", result["status"])
         self.assertEqual("invoke", result["action"])
+        self.assertEqual([True], invoked)
+
+    def test_uia_select_named_control_accepts_target_inside_long_label(self):
+        invoked = []
+        control = SimpleNamespace(
+            Name="朱镇平 12:24 [图片]", ControlTypeName="ButtonControl",
+            IsOffscreen=False,
+            GetPattern=lambda pattern_id: SimpleNamespace(Invoke=lambda: invoked.append(True)),
+        )
+        auto = types.ModuleType("uiautomation")
+        auto.PatternId = SimpleNamespace(
+            SelectionItemPattern="selection", InvokePattern="invoke",
+            LegacyIAccessiblePattern="legacy",
+        )
+        with patch.dict(sys.modules, {"uiautomation": auto}), \
+             patch.object(computer_module, "_uia_controls", return_value=[control]):
+            result = computer_module._uia_select_named_control(88, "朱镇平")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["requires_visual_confirmation"])
         self.assertEqual([True], invoked)
 
     def test_uia_select_named_control_ignores_stale_wrapper_for_actionable_button(self):
@@ -583,6 +741,30 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.llm = FakeLLM()
         self.current_llm = self.llm
         computer_module.register_tools(self.registry, lambda: self.current_llm)
+
+    async def test_corner_failsafe_is_removed_but_permission_hook_still_blocks(self):
+        self.assertFalse(self.pg.FAILSAFE)
+        self.pg.failSafeCheck()
+        before = list(self.pg.actions)
+        with patch.object(system_control, "check_foreground_permission", side_effect=RuntimeError("Esc revoked")):
+            with self.assertRaises(RuntimeError):
+                self.pg.failSafeCheck()
+            with self.assertRaises(RuntimeError):
+                system_control._run_controlled_input(self.pg.click, (50, 50), {})
+        self.assertEqual(before, self.pg.actions)
+
+    async def test_fuzzy_selected_destination_cannot_send_without_independent_confirmation(self):
+        window = FakeWindow("App", 88)
+        with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(computer_module, "_uia_select_named_control", return_value={
+                 "ok": True, "requires_visual_confirmation": True}), \
+             patch.object(computer_module, "_uia_background_send") as send:
+            result = await self.registry.call("send_text_to_window", {
+                "window": "App", "destination": "Alice", "text": "hello", "allow_visual_fallback": False})
+        self.assertFalse(result["ok"])
+        self.assertEqual("uia_target_unconfirmed", result["status"])
+        send.assert_not_called()
+        self.assertEqual([], self.pg.actions)
 
     async def test_screenshot_path_variants_preserve_scale_and_crop_mapping(self):
         screenshot = "D:/XiaoA/screenshots/current.jpg".replace("/", chr(92))
@@ -1512,7 +1694,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(side_effect=[False, False, True])) as confirm, \
              patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
-             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'gray', 'black']]), \
+             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'gray', 'black', 'black']]), \
              patch.object(computer_module, "_uia_background_send", return_value={"available": True, "verified": True}) as background:
             result = await self.registry.call("send_text_to_window", {"window": "微信", "destination": "测试联系人", "text": "测试"})
         self.assertTrue(result["ok"])
@@ -1829,6 +2011,58 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await computer_module.confirm_destination_in_image(llm, b"image", "项目会话"))
         llm.vision.return_value = '```json\n{"confirmed": true}\n```'
         self.assertTrue(await computer_module.confirm_destination_in_image(llm, b"image", "项目会话"))
+
+    async def test_visual_input_point_reuse_is_same_frame_only_and_skips_unusable_uia(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                window = FakeWindow("微信", 401 + changed, (0, 0, 100, 80))
+                llm = SimpleNamespace(vision=AsyncMock(return_value='{"confirmed":true,"input_x":12,"input_y":9,"coordinate_space":"pixels"}'))
+                frames = [Image.new("RGB", (100, 80), "white"),
+                          Image.new("RGB", (100, 80), "black" if changed else "white")]
+                self.pg.actions.clear()
+                with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+                     patch.object(computer_module, "_uia_select_named_control", return_value={
+                         "ok": False, "status": "uia_selection_unavailable", "uia_tree_unusable": True}), \
+                     patch.object(computer_module, "_uia_background_send") as background, \
+                     patch.object(computer_module, "_focus_semantic_text_input") as semantic, \
+                     patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
+                     patch.object(computer_module, "_foreground_window_handle", return_value=window._hWnd), \
+                     patch.object(ImageGrab, "grab", side_effect=frames + [frames[-1]] * 4), \
+                     patch.object(computer_module, "locate_in_image", new=AsyncMock(return_value=(20, 30))) as locate:
+                    previous = self.current_llm
+                    self.current_llm = llm
+                    try:
+                        result = await self.registry.call("send_text_to_window", {
+                            "window": "微信", "destination": "target", "text": "draft", "submit_key": "none"})
+                    finally:
+                        self.current_llm = previous
+                self.assertTrue(result["ok"], result)
+                background.assert_not_called()
+                semantic.assert_not_called()
+                self.assertEqual(int(changed), locate.await_count)
+                self.assertEqual((20, 30) if changed else (12, 9), self.pg.actions[0][1:3])
+
+    async def test_visual_confirmation_only_exports_valid_input_point_when_confirmed(self):
+        llm = SimpleNamespace(vision=AsyncMock(return_value='{"confirmed":true,"input_x":12,"input_y":9,"coordinate_space":"pixels"}'))
+        target = {"width": 100, "height": 80}
+        self.assertTrue(await computer_module.confirm_destination_in_image(
+            llm, b"image", "项目会话", input_desc="消息输入框", input_target=target,
+        ))
+        self.assertEqual({"width": 100, "height": 80, "x": 12, "y": 9, "coordinate_space": "pixels"}, target)
+        llm.vision.return_value = '{"confirmed":false,"input_x":1,"input_y":2,"coordinate_space":"pixels"}'
+        target = {"width": 100, "height": 80}
+        self.assertFalse(await computer_module.confirm_destination_in_image(
+            llm, b"image", "项目会话", input_desc="消息输入框", input_target=target,
+        ))
+        self.assertNotIn("x", target)
+        for fields in ('"input_x":true,"input_y":9,"coordinate_space":"pixels"',
+                       '"input_x":100,"input_y":9,"coordinate_space":"pixels"',
+                       '"input_x":12,"input_y":9,"coordinate_space":"normalized_1000"'):
+            target = {"width": 100, "height": 80}
+            llm.vision.return_value = '{"confirmed":true,' + fields + '}'
+            self.assertTrue(await computer_module.confirm_destination_in_image(
+                llm, b"image", "target", input_desc="editor", input_target=target))
+            self.assertNotIn("x", target)
 
     async def test_rejected_risk_authorization_cannot_be_bypassed_by_submit_route(self):
         state = ConversationApproval()
