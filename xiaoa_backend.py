@@ -56,6 +56,11 @@ if getattr(sys, "_MEIPASS", ""):
     if payload.is_dir():
         sys.path.insert(0, str(payload))
 
+if __name__ == '__main__' and sys.argv[1:] == ['--escape-listener']:
+    from backend.modules.computer.escape_key import serve
+    serve()
+    raise SystemExit(0)
+
 if __name__ == '__main__' and sys.argv[1:] == ['--uia-reader']:
     from backend.modules.computer.uia_query import serve
     serve()

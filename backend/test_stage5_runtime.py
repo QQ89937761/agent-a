@@ -468,9 +468,9 @@ class DesktopContinuityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ScreenshotQualityTests(unittest.TestCase):
-    def test_auto_preserves_readable_full_hd_when_budget_allows(self):
+    def test_auto_bounds_observation_width_for_desktop_latency(self):
         data, width, height = computer_module.compress_screenshot(Image.new("RGB", (1920, 1080), "white"))
-        self.assertEqual((1920, 1080), (width, height))
+        self.assertEqual((1280, 720), (width, height))
         self.assertLessEqual(len(data), computer_module._SCREENSHOT_MAX_BYTES)
 
     def test_high_detail_preserves_larger_frame_with_same_byte_ceiling(self):

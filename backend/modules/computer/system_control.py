@@ -31,7 +31,7 @@ from backend.core.config import subprocess_env_without_secrets
 from backend.core.process import hidden_subprocess_kwargs
 from backend.core.tools import ToolRegistry
 from backend.core import isolation_workspace
-from backend.modules.computer.escape_key import ensure_listener
+from backend.modules.computer.escape_key import ensure_listener, stop_listener
 
 _IS_WINDOWS = sys.platform == "win32"
 _CONTROL_LOCK = threading.Lock()
@@ -100,9 +100,11 @@ def check_foreground_permission() -> None:
         raise RuntimeError("桌面控制权已交还用户，本任务不能再次操作鼠标键盘")
 
 
-def _escape_foreground() -> None:
+def _escape_foreground(expected: ControlToken | None = None) -> None:
     with _CONTROL_STATE_LOCK:
         control = _CONTROL_OWNER
+        if expected is not None and control is not expected:
+            return  # A late event from an old helper cannot stop a new task.
         session = control.session if control is not None else None
         if session is None or not control.foreground or session.revoked.is_set():
             return
@@ -531,8 +533,6 @@ async def acquire_control(timeout: float = 8.0, *, foreground: bool = True) -> C
     session = _CONTROL_SESSION.get()
     check_foreground_permission()
     if session is not None:
-        if foreground:
-            ensure_listener(_escape_foreground)
         if session.control is not None and _CONTROL_OWNER is session.control:
             if foreground:
                 activate_foreground(session.control)
@@ -547,6 +547,13 @@ async def acquire_control(timeout: float = 8.0, *, foreground: bool = True) -> C
             token = ControlToken()
             token.foreground = foreground
             with _CONTROL_STATE_LOCK:
+                if foreground and session is not None:
+                    try:
+                        ensure_listener(lambda: _escape_foreground(token))
+                    except Exception:
+                        stop_listener()
+                        _CONTROL_LOCK.release()
+                        raise
                 _CONTROL_OWNER = token
                 if session is not None:
                     session.control = token
@@ -563,8 +570,6 @@ def acquire_control_sync(timeout: float = 8.0, *, foreground: bool = True) -> Co
     session = _CONTROL_SESSION.get()
     check_foreground_permission()
     if session is not None:
-        if foreground:
-            ensure_listener(_escape_foreground)
         if session.control is not None and _CONTROL_OWNER is session.control:
             if foreground:
                 activate_foreground(session.control)
@@ -578,6 +583,13 @@ def acquire_control_sync(timeout: float = 8.0, *, foreground: bool = True) -> Co
     token = ControlToken()
     token.foreground = foreground
     with _CONTROL_STATE_LOCK:
+        if foreground and session is not None:
+            try:
+                ensure_listener(lambda: _escape_foreground(token))
+            except Exception:
+                stop_listener()
+                _CONTROL_LOCK.release()
+                raise
         _CONTROL_OWNER = token
         if session is not None:
             session.control = token
@@ -589,11 +601,11 @@ def acquire_control_sync(timeout: float = 8.0, *, foreground: bool = True) -> Co
 def activate_foreground(token: ControlToken) -> None:
     """Promote a silent UIA lease only when foreground keyboard/mouse input is needed."""
     check_foreground_permission()
-    if token.session is not None:
-        ensure_listener(_escape_foreground)
     with _CONTROL_STATE_LOCK:
         if _CONTROL_OWNER is not token or (token.session is not None and token.session.revoked.is_set()):
             raise RuntimeError("前台控制 token 已失效")
+        if token.session is not None:
+            ensure_listener(lambda: _escape_foreground(token))
         if not token.foreground:
             token.foreground = True
             _notify_foreground(token, True)
@@ -615,6 +627,7 @@ def release_control(token: ControlToken, *, force: bool = False) -> bool:
         if token.foreground:
             _notify_foreground(token, False)
         _CONTROL_LOCK.release()
+        stop_listener()
     return True
 
 
@@ -635,6 +648,7 @@ def _control_worker_done(token: ControlToken, worker: asyncio.Task[Any]) -> None
             if token.foreground:
                 _notify_foreground(token, False)
             _CONTROL_LOCK.release()
+            stop_listener()
     if error is not None and should_release:
         _LOGGER.warning("cancelled foreground worker failed during cleanup: %s", error)
 

@@ -54,6 +54,22 @@ class VisualContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('y范围0到781', llm.vision.call_args.args[0])
         self.assertIsNone(parse_coords('null'))
 
+    async def test_coordinate_prompts_and_confirmed_input_points_support_normalized_1000(self):
+        llm = SimpleNamespace(vision=AsyncMock(return_value='{"x":200,"y":180,"coordinate_space":"normalized_1000"}'))
+        point = await locate_in_image(llm, b"image", "联系人", 957, 782)
+        self.assertEqual((191, 141), point)
+        self.assertIn('"coordinate_space":"normalized_1000"', llm.vision.call_args.args[0])
+        self.assertIn('"coordinate_space":"pixels"', llm.vision.call_args.args[0])
+
+        from backend.modules.computer.computer_module import confirm_destination_in_image
+        target = {"width": 957, "height": 782}
+        llm.vision.return_value = '{"confirmed":true,"input_x":200,"input_y":180,"coordinate_space":"normalized_1000"}'
+        self.assertTrue(await confirm_destination_in_image(
+            llm, b"image", "联系人", input_desc="输入框", input_target=target,
+        ))
+        self.assertEqual((191, 141), (target["x"], target["y"]))
+        self.assertIn("957x782", llm.vision.call_args.args[0])
+
     async def test_agent_exposes_failure_crop_and_mapping_for_next_model_turn(self):
         class InspectLLM(OneCallLLM):
             async def chat_stream_tools(self, messages, *args, **kwargs):

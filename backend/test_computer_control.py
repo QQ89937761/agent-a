@@ -780,6 +780,23 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                     "x": 3, "y": 4, "purpose": "test mapped screenshot", "screenshot_path": reference})
                 self.assertEqual((16, 28), (result["x"], result["y"]))
                 self.assertEqual(("click", 16, 28, "left"), self.pg.actions[-1])
+        mapped = await self.registry.call("click_coordinate", {
+            "x": 500, "y": 1000, "purpose": "normalized mapping", "screenshot_path": variants[0],
+            "coordinate_space": "normalized_1000",
+        })
+        self.assertEqual((38, 58), (mapped["x"], mapped["y"]))
+        before = len(self.pg.actions)
+        with self.assertRaisesRegex(ValueError, "必须绑定有效 screenshot_path"):
+            await self.registry.call("click_coordinate", {
+                "x": 500, "y": 500, "purpose": "unbound normalized", "coordinate_space": "normalized_1000",
+            })
+        self.assertEqual(before, len(self.pg.actions))
+        with self.assertRaisesRegex(ValueError, "须为0到1000整数"):
+            await self.registry.call("click_coordinate", {
+                "x": 1001, "y": 500, "purpose": "out of range", "screenshot_path": variants[0],
+                "coordinate_space": "normalized_1000",
+            })
+        self.assertEqual(before, len(self.pg.actions))
         for reference in ("D:/Other/screenshots/current.jpg", "D:/XiaoA/screenshots/unknown.jpg"):
             before = len(self.pg.actions)
             with self.subTest(reference=reference), self.assertRaisesRegex(ValueError, "截图引用不可用"):
@@ -2025,7 +2042,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                          "ok": False, "status": "uia_selection_unavailable", "uia_tree_unusable": True}), \
                      patch.object(computer_module, "_uia_background_send") as background, \
                      patch.object(computer_module, "_focus_semantic_text_input") as semantic, \
-                     patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
+                     patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}) as focus, \
                      patch.object(computer_module, "_foreground_window_handle", return_value=window._hWnd), \
                      patch.object(ImageGrab, "grab", side_effect=frames + [frames[-1]] * 4), \
                      patch.object(computer_module, "locate_in_image", new=AsyncMock(return_value=(20, 30))) as locate:
@@ -2039,8 +2056,9 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result["ok"], result)
                 background.assert_not_called()
                 semantic.assert_not_called()
-                self.assertEqual(int(changed), locate.await_count)
-                self.assertEqual((20, 30) if changed else (12, 9), self.pg.actions[0][1:3])
+                self.assertEqual(0, locate.await_count)
+                self.assertEqual(1, focus.call_count)
+                self.assertEqual((12, 9), self.pg.actions[0][1:3])
 
     async def test_visual_confirmation_only_exports_valid_input_point_when_confirmed(self):
         llm = SimpleNamespace(vision=AsyncMock(return_value='{"confirmed":true,"input_x":12,"input_y":9,"coordinate_space":"pixels"}'))
@@ -2062,7 +2080,15 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
             llm.vision.return_value = '{"confirmed":true,' + fields + '}'
             self.assertTrue(await computer_module.confirm_destination_in_image(
                 llm, b"image", "target", input_desc="editor", input_target=target))
-            self.assertNotIn("x", target)
+            if '"input_x":12' in fields and 'normalized_1000' in fields:
+                self.assertEqual((1, 1), (target["x"], target["y"]))
+            else:
+                self.assertNotIn("x", target)
+        target = {"width": 101, "height": 81}
+        llm.vision.return_value = '{"confirmed":true,"input_x":500,"input_y":1000,"coordinate_space":"normalized_1000"}'
+        self.assertTrue(await computer_module.confirm_destination_in_image(
+            llm, b"image", "target", input_desc="editor", input_target=target))
+        self.assertEqual((50, 80), (target["x"], target["y"]))
 
     async def test_rejected_risk_authorization_cannot_be_bypassed_by_submit_route(self):
         state = ConversationApproval()
@@ -2241,7 +2267,37 @@ class SystemToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
 
 
+class MessageComposerTests(unittest.TestCase):
+    def test_search_unknown_and_ambiguous_editors_never_receive_focus(self):
+        def editor(name="", **kwargs):
+            return SimpleNamespace(ControlTypeName="EditControl", Name=name, **kwargs)
+        composer = editor("消息")
+        search = editor("消息搜索", SetFocus=Mock())
+        for rejected in (search, editor("输入", AutomationId="SearchBox"),
+                         editor("message", ClassName="AddressEdit"), editor("输入"),
+                         editor("", ClassName="WeChatEdit"),
+                         editor("消息", IsOffscreen=True), editor("消息", IsPassword=True),
+                         editor("消息", IsEnabled=False)):
+            with self.subTest(control=rejected):
+                self.assertIsNone(computer_module._semantic_text_input(1, controls=[rejected]))
+                self.assertIs(composer, computer_module._semantic_text_input(1, controls=[rejected, composer]))
+        self.assertIsNone(computer_module._semantic_text_input(1, controls=[composer, editor("reply")]))
+        with patch.object(computer_module, "_uia_controls", return_value=[search]):
+            self.assertFalse(computer_module._focus_semantic_text_input(1))
+        search.SetFocus.assert_not_called()
+
+
 class ScreenshotCompressionTests(unittest.TestCase):
+    def test_high_detail_preserves_resolution_and_auto_reuses_same_width_resize(self):
+        image = Image.new("RGB", (3840, 2160), "white")
+        data, width, height = computer_module.compress_screenshot(image, detail="high")
+        self.assertIsNotNone(data)
+        self.assertEqual((2560, 1440), (width, height))
+        with patch.object(Image.Image, "resize", autospec=True, side_effect=Image.Image.resize) as resize:
+            data, _, _ = computer_module.compress_screenshot(image, max_bytes=1)
+        self.assertIsNone(data)
+        self.assertEqual(4, resize.call_count)  # Four widths, not five quality attempts.
+
     def test_compress_screenshot_reduces_high_entropy_image(self):
         from backend.core.agent import estimate_text_tokens
 
@@ -2258,8 +2314,8 @@ class ScreenshotCompressionTests(unittest.TestCase):
         data, width, height = computer_module.compress_screenshot(img)
         self.assertIsNotNone(data)
         self.assertTrue(data.startswith(b"\xff\xd8"))  # JPEG magic
-        self.assertEqual(1920, width)  # Auto detail preserves readable full-HD observations.
-        self.assertEqual(1080, height)
+        self.assertEqual(1280, width)  # Fine text remains available through detail="high".
+        self.assertEqual(720, height)
 
     def test_compact_fits_compressed_screenshot(self):
         from backend.core.agent import compact_for_limit

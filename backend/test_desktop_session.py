@@ -1,12 +1,14 @@
 """Task-scoped ownership, physical Esc revocation and safe worker cleanup."""
 import asyncio
 import threading
+import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from backend.modules.computer import system_control as control
+from backend.modules.computer import escape_key
 from backend.modules.computer.escape_key import physical_escape
 
 
@@ -49,6 +51,24 @@ class DesktopSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(42, control.owned_application_pid("autocad"))
         await asyncio.to_thread(control.clear_owned_application, "autocad")
         self.assertFalse(control.owned_application("autocad"))
+
+    async def test_delayed_escape_from_released_helper_cannot_stop_new_owner(self):
+        first = await control.acquire_control(.1)
+        old_callback = control.ensure_listener.call_args.args[0]
+        control.release_control(first, force=True)
+        second = await control.acquire_control(.1)
+        old_callback()
+        self.assertIs(second, control._CONTROL_OWNER)
+        self.assertFalse(second.session.revoked.is_set())
+        self.stop.assert_not_called()
+
+    async def test_unavailable_stop_channel_releases_lease_before_any_input(self):
+        with patch.object(control, "ensure_listener", side_effect=RuntimeError("listener unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "listener unavailable"):
+                await control.acquire_control(.1)
+        self.assertIsNone(control._CONTROL_OWNER)
+        self.assertFalse(control._CONTROL_LOCK.locked())
+        self.assertEqual([], self.notices)
 
     async def test_same_task_keeps_control_between_tools_until_finished(self):
         first = await control.acquire_control(.1)
@@ -170,3 +190,49 @@ class DesktopSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(physical_escape(0, 0x101, 0x1B, 0))  # key-up
         self.assertFalse(physical_escape(-1, 0x100, 0x1B, 0))
         self.assertFalse(physical_escape(0, 0x100, 0x41, 0))
+
+
+class EscapeListenerProcessTests(unittest.TestCase):
+    def tearDown(self):
+        escape_key.stop_listener()
+        if escape_key._thread is not None:
+            escape_key._thread.join(1)
+
+    def start_helper(self, callback, *, notify=False):
+        # Exercise the real pipe protocol without installing a global test hook.
+        source = "import sys; print('ready', flush=True); "
+        if notify:
+            source += "print('escape', flush=True); "
+        source += "sys.stdin.read()"
+        popen = subprocess.Popen
+        def launch(_command, **kwargs):
+            return popen([sys.executable, "-u", "-c", source], **kwargs)
+        with patch.object(escape_key.subprocess, "Popen", side_effect=launch):
+            escape_key.ensure_listener(callback)
+        return escape_key._process
+
+    def test_helper_notification_reuse_and_clean_shutdown(self):
+        stopped = threading.Event()
+        process = self.start_helper(stopped.set, notify=True)
+        self.assertTrue(stopped.wait(1))
+        with patch.object(escape_key.subprocess, "Popen") as launch:
+            escape_key.ensure_listener(stopped.set)
+        launch.assert_not_called()
+        stopped.clear()
+        escape_key.stop_listener()
+        escape_key._thread.join(1)
+        self.assertEqual(0, process.poll())
+        self.assertFalse(stopped.is_set())
+        self.assertFalse(escape_key._thread.is_alive())
+
+    def test_helper_death_revokes_control_and_can_restart(self):
+        stopped = threading.Event()
+        process = self.start_helper(stopped.set)
+        process.kill()
+        process.wait(timeout=2)
+        self.assertTrue(stopped.wait(1))
+        escape_key.stop_listener()
+        escape_key._thread.join(1)
+        self.assertIsNotNone(escape_key._error)
+        replacement = self.start_helper(stopped.set)
+        self.assertIsNone(replacement.poll())
