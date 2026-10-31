@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import threading
+import tempfile
 import unittest
 from multiprocessing.shared_memory import SharedMemory
 from unittest.mock import patch, Mock
@@ -17,6 +18,13 @@ from backend.core.process import hidden_subprocess_kwargs
 
 
 class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def read_worker_line(self, process, diagnostics, timeout):
+        try:
+            return await asyncio.wait_for(process.stdout.readline(), timeout)
+        except TimeoutError:
+            diagnostics.seek(0)
+            self.fail("desktop worker did not respond:\n" + diagnostics.read().decode("utf-8", errors="replace"))
+
     async def test_timeout_cancel_and_escape_kill_process_then_allow_new_owner(self):
         for reason in ("timeout", "cancel", "escape"):
             with self.subTest(reason=reason), patch.object(system_control, "ensure_listener"), patch.object(system_control, "stop_listener"):
@@ -111,20 +119,24 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_entry_rejects_code_and_exits_on_parent_eof(self):
         memory = SharedMemory(create=True, size=520)
         root = Path(__file__).resolve().parent.parent
-        process = await asyncio.create_subprocess_exec(sys.executable, str(root / "xiaoa_backend.py"),
+        diagnostics = tempfile.TemporaryFile()
+        program = ("import faulthandler,runpy,sys; faulthandler.enable(); "
+                   "faulthandler.dump_traceback_later(10, repeat=False); "
+                   "entry=sys.argv.pop(1); runpy.run_path(entry,run_name='__main__')")
+        process = await asyncio.create_subprocess_exec(sys.executable, "-u", "-c", program, str(root / "xiaoa_backend.py"),
             "--desktop-worker", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, **hidden_subprocess_kwargs())
+            stderr=diagnostics, **hidden_subprocess_kwargs())
         try:
             process.stdin.write((json.dumps({"memory": memory.name}) + "\n").encode())
             process.stdin.write((json.dumps({"action": {"kind": "eval", "name": "eval", "args": [], "kwargs": {}}}) + "\n").encode())
             await process.stdin.drain()
-            response = json.loads(await asyncio.wait_for(process.stdout.readline(), 15))
+            response = json.loads(await self.read_worker_line(process, diagnostics, 15))
             self.assertEqual({"error": "Unsupported desktop action"}, response)
             # Empty write exercises the real input route without generating desktop input.
             process.stdin.write((json.dumps({"action": {"kind": "input", "name": "typewrite",
                 "args": [""], "kwargs": {}}}) + "\n").encode())
             await process.stdin.drain()
-            self.assertEqual({"result": None}, json.loads(await asyncio.wait_for(process.stdout.readline(), 5)))
+            self.assertEqual({"result": None}, json.loads(await self.read_worker_line(process, diagnostics, 5)))
             process.stdin.close()
             await asyncio.wait_for(process.wait(), 3)
             self.assertEqual(0, process.returncode)
@@ -132,22 +144,26 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+            diagnostics.close()
             memory.close()
             memory.unlink()
 
     @unittest.skipUnless(sys.platform == "win32", "Windows desktop entry")
     async def test_parent_eof_stops_worker_even_during_blocked_native_action(self):
         memory = SharedMemory(create=True, size=520)
-        program = ("import time; from backend.modules.computer import action_worker as w; "
+        diagnostics = tempfile.TemporaryFile()
+        program = ("import faulthandler,time; faulthandler.enable(); "
+                   "faulthandler.dump_traceback_later(10, repeat=False); "
+                   "from backend.modules.computer import action_worker as w; "
                    "w._execute=lambda *args: (print('entered',flush=True),time.sleep(60)); w.serve()")
         process = await asyncio.create_subprocess_exec(sys.executable, "-u", "-c", program,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, **hidden_subprocess_kwargs())
+            stderr=diagnostics, **hidden_subprocess_kwargs())
         try:
             process.stdin.write((json.dumps({"memory": memory.name}) + "\n" +
                                  json.dumps({"action": {}}) + "\n").encode())
             await process.stdin.drain()
-            self.assertEqual(b"entered", (await asyncio.wait_for(process.stdout.readline(), 15)).strip())
+            self.assertEqual(b"entered", (await self.read_worker_line(process, diagnostics, 15)).strip())
             process.stdin.close()
             await asyncio.wait_for(process.wait(), 3)
             self.assertEqual(0, process.returncode)
@@ -155,6 +171,7 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+            diagnostics.close()
             memory.close()
             memory.unlink()
 

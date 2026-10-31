@@ -65,3 +65,16 @@ jobs:
       - name: 前端检查
         working-directory: frontend
         run: npm run check
+
+  desktop-worker:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install desktop worker test dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Verify native worker startup and control release
+        timeout-minutes: 3
+        run: python -m unittest backend.test_action_worker -v
