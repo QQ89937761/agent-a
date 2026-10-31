@@ -336,7 +336,7 @@ class ScheduledAgentConfirmationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CloudSyncScheduleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cloud_runtime_sync_includes_schedule_tasks(self):
+    async def test_cloud_runtime_sync_does_not_overwrite_hub_schedule(self):
         from backend.api import server
 
         local = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
@@ -347,8 +347,7 @@ class CloudSyncScheduleTests(unittest.IsolatedAsyncioTestCase):
             result = await server.api_cloud_runtime(local)
         self.assertTrue(result["ok"])
         values = sync.call_args.args[1]
-        self.assertIn("AGENT_SCHEDULE_TASKS", values)
-        self.assertEqual(values["AGENT_SCHEDULE_TASKS"], '[{"id":"x"}]')
+        self.assertNotIn("AGENT_SCHEDULE_TASKS", values)
 
 
 class ScheduleCloudPushTests(unittest.IsolatedAsyncioTestCase):
@@ -436,6 +435,105 @@ class ScheduleCloudPushTests(unittest.IsolatedAsyncioTestCase):
             tmp.cleanup()
         self.assertTrue(result["ok"])
         self.assertIn("同步到云端失败", result.get("cloud_warning", ""))
+
+    async def test_worker_schedule_list_uses_cloud_authority_and_keeps_local_tasks(self):
+        from backend.api import server
+        cfg = Config()
+        cfg.role.mode, cfg.role.hub_url, cfg.role.hub_token = "worker", "wss://192.0.2.1:1004/worker", "test"
+        local = {"id": "local", "location": "local", "name": "本机提醒"}
+        stale = {"id": "deleted", "location": "cloud", "name": "已在云端删除"}
+        cloud = [{"id": channel, "location": "cloud", "name": channel, "done": True}
+                 for channel in ("weixin", "feishu")]
+        with patch.object(server, "CFG", cfg), \
+             patch.object(server.SCHEDULER, "list_tasks", return_value=[local, stale]), \
+             patch("backend.core.cloud_deploy.schedule_request", return_value={"ok": True, "tasks": cloud}) as remote:
+            result = await server.api_schedule_list(self._request())
+        self.assertEqual([local, *cloud], result["tasks"])
+        remote.assert_called_once_with(server.app_home(), cfg.role.hub_url, "GET", "", None)
+
+    async def test_worker_schedule_list_keeps_local_tasks_and_warns_when_hub_fails(self):
+        from backend.api import server
+        cfg = Config()
+        cfg.role.mode, cfg.role.hub_url, cfg.role.hub_token = "worker", "wss://192.0.2.1:1004/worker", "test"
+        local = {"id": "local", "location": "local", "name": "本机提醒"}
+        for response in (OSError("offline"), {"ok": False}, {"ok": True, "tasks": None}):
+            with self.subTest(response=response), patch.object(server, "CFG", cfg), \
+                 patch.object(server.SCHEDULER, "list_tasks", return_value=[local]), \
+                 patch("backend.core.cloud_deploy.schedule_request", **(
+                     {"side_effect": response} if isinstance(response, Exception) else {"return_value": response})):
+                result = await server.api_schedule_list(self._request())
+            self.assertEqual([local], result["tasks"])
+            self.assertIn("cloud_warning", result)
+
+    async def test_worker_cloud_crud_targets_live_hub_without_restarting_or_replacing_table(self):
+        from backend.api import server
+        cfg = Config()
+        cfg.role.mode, cfg.role.hub_url, cfg.role.hub_token = "worker", "wss://192.0.2.1:1004/worker", "test"
+        req = server.ScheduleTaskRequest(name="新提醒", channel="weixin", text="内容")
+        with patch.object(server, "CFG", cfg), \
+             patch.object(server.SCHEDULER, "list_tasks", return_value=[]), \
+             patch.object(server.SCHEDULER, "add_task") as add, \
+             patch.object(server.SCHEDULER, "set_enabled") as enable, \
+             patch.object(server.SCHEDULER, "remove_task") as remove, \
+             patch("backend.core.cloud_deploy.sync_runtime_settings") as sync, \
+             patch("backend.core.cloud_deploy.schedule_request", return_value={"ok": True}) as remote:
+            self.assertTrue((await server.api_schedule_add(req, self._request()))["ok"])
+            self.assertEqual(("POST", ""), remote.call_args.args[2:4])
+            self.assertEqual("cloud", remote.call_args.args[4]["location"])
+            await server.api_schedule_update("cloud", req, self._request())
+            self.assertEqual(("PUT", "/cloud"), remote.call_args.args[2:4])
+            await server.api_schedule_enable(server.ScheduleEnableRequest(id="cloud", enabled=False), self._request())
+            self.assertEqual(("POST", "/enable", {"id": "cloud", "enabled": False}), remote.call_args.args[2:])
+            await server.api_schedule_remove("cloud", self._request())
+            self.assertEqual(("DELETE", "/cloud"), remote.call_args.args[2:4])
+            add.assert_not_called()
+            enable.assert_not_called()
+            remove.assert_not_called()
+            sync.assert_not_called()
+
+    async def test_worker_remote_failure_does_not_delete_local_shadow(self):
+        from backend.api import server
+        cfg = Config()
+        cfg.role.mode, cfg.role.hub_url, cfg.role.hub_token = "worker", "wss://192.0.2.1:1004/worker", "test"
+        with patch.object(server, "CFG", cfg), \
+             patch.object(server.SCHEDULER, "list_tasks", return_value=[{"id": "cloud", "location": "cloud"}]), \
+             patch.object(server.SCHEDULER, "remove_task") as remove, \
+             patch("backend.core.cloud_deploy.schedule_request", side_effect=OSError("offline")):
+            result = await server.api_schedule_remove("cloud", self._request())
+            self.assertFalse(result["ok"])
+            remove.assert_not_called()
+
+    async def test_channel_tools_share_hub_tasks_and_reject_other_chat_deletion(self):
+        from backend.api import server
+        cfg = Config()
+        cfg.role.mode, cfg.role.hub_url, cfg.role.hub_token = "worker", "wss://192.0.2.1:1115/worker", "test"
+        task = {"id": "chat", "name": "提醒", "kind": "remind", "schedule": "daily", "time": "09:00",
+                "location": "cloud", "channel": "weixin", "channel_target": "user-a", "channel_account_id": "bot",
+                "enabled": True}
+        other = {**task, "id": "other", "channel_target": "user-b"}
+        registry = ToolRegistry()
+        server.register_schedule_tools(registry)
+        token = server.CURRENT_CHANNEL.set(server._channel_session_key("weixin", "user-a", "bot"))
+        try:
+            with patch.object(server, "CFG", cfg), \
+                 patch.object(server.SCHEDULER, "list_tasks", return_value=[]), \
+                 patch("backend.core.cloud_deploy.schedule_request") as remote:
+                remote.return_value = {"ok": True, "task": task}
+                self.assertIn("已创建", await registry.call("schedule_add", {"name": "提醒", "text": "内容"}))
+                self.assertEqual("user-a", remote.call_args.args[4]["channel_target"])
+                remote.return_value = {"ok": True, "tasks": [task, other]}
+                listed = await registry.call("schedule_list", {})
+                self.assertIn("chat:", listed)
+                self.assertNotIn("other:", listed)
+                remote.reset_mock()
+                self.assertIn("其他会话", await registry.call("schedule_remove", {"task_id": "other"}))
+                self.assertEqual(1, remote.call_count)
+                remote.side_effect = [{"ok": True, "tasks": [task]}, {"ok": True}]
+                self.assertIn("已删除", await registry.call("schedule_remove", {"task_id": "chat"}))
+                self.assertEqual(("DELETE", "/chat"), remote.call_args.args[2:4])
+        finally:
+            server.CURRENT_CHANNEL.reset(token)
+
 
 
 class ScheduledNoticeDeliveryTests(unittest.IsolatedAsyncioTestCase):

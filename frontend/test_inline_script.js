@@ -1409,3 +1409,32 @@ assert.match(settingsHtml, /tencentCredentialClearSaved/);
   assert.equal(fields.voice_preview_text.value, 'user entered text');
   console.log('custom voice preview: selected provider, exact user text, encoding, input limits and playback passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+const scheduleLoadStart = settingsCspHtml.indexOf('    async function loadSchedule()');
+const scheduleLoadEnd = settingsCspHtml.indexOf('    function renderScheduleList', scheduleLoadStart);
+(async () => {
+  const nodes = {sched_refresh: {disabled: false}, sched_sync_status: {textContent: '', className: ''}};
+  const rendered = [];
+  let answer = {ok: true, tasks: [{id: 'weixin'}, {id: 'feishu'}]}, reject = false;
+  const context = require('node:vm').createContext({$: id => nodes[id], API: '',
+    fetch: async () => { if (reject) throw Error('offline'); return {ok: true, json: async () => answer}; },
+    renderScheduleList: tasks => rendered.push(tasks),
+  });
+  require('node:vm').runInContext(settingsCspHtml.slice(scheduleLoadStart, scheduleLoadEnd), context);
+  await nodes.sched_refresh.onclick();
+  assert.equal(rendered.at(-1).length, 2, 'cloud channel tasks reach the list');
+  answer = {ok: true, tasks: [{id: 'local'}], cloud_warning: 'cloud unavailable'};
+  await nodes.sched_refresh.onclick();
+  assert.equal(rendered.at(-1)[0].id, 'local');
+  assert.equal(nodes.sched_sync_status.textContent, 'cloud unavailable');
+  assert.equal(nodes.sched_sync_status.className, 'msg err');
+  reject = true;
+  await nodes.sched_refresh.onclick();
+  assert.equal(rendered.at(-1)[0].id, 'local', 'request failures retain displayed tasks');
+  assert.equal(nodes.sched_refresh.disabled, false, 'errors allow retry');
+  assert.equal(nodes.sched_sync_status.textContent, 'offline');
+  reject = false; answer = {ok: true, tasks: []};
+  await nodes.sched_refresh.onclick();
+  assert.equal(nodes.sched_sync_status.textContent, '', 'successful retry clears the warning');
+  assert.equal(rendered.at(-1).length, 0, 'cloud deletions clear the list');
+  console.log('schedule refresh: cloud tasks, offline retention, warnings, deletion and retry passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

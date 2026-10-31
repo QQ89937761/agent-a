@@ -565,6 +565,49 @@ def _remote_env_capabilities(client: SSHClient, elevate: str) -> set[str] | None
     return tokens or None
 
 
+def schedule_request(root: str | Path, hub_url: str, method: str,
+                     path: str = "", payload: dict | None = None) -> dict:
+    """Call the hub's live scheduler over the enrolled SSH management connection."""
+    from urllib.parse import urlsplit
+
+    hub = urlsplit(hub_url)
+    if hub.scheme not in ("ws", "wss") or not hub.hostname:
+        raise SSHClientError("云端连接地址无效")
+    if method not in ("GET", "POST", "PUT", "DELETE") or not re.fullmatch(r"(?:/[A-Za-z0-9_%.-]+)?", path):
+        raise ValueError("无效的定时任务操作")
+    target = json.loads((Path(root) / "data/cloud-ssh/target.json").read_text(encoding="utf-8"))
+    host, username = validate_target(target.get("host", ""), target.get("username", ""))
+    if host != hub.hostname:
+        raise SSHClientError("云端管理连接与当前 hub 不一致，请重新连接云端")
+    key_path = identity_path(host, username, root)
+    if not key_path.is_file():
+        raise SSHClientError("本机云端专用密钥不存在，请重新连接云端")
+    # The public worker port can be nginx's port. Read only the backend port
+    # from the service env, and call the live scheduler on loopback inside SSH.
+    code = (
+        "import json,ssl; from pathlib import Path; "
+        "from urllib.request import Request,build_opener,ProxyHandler,HTTPSHandler; "
+        "ports=[line.split('=',1)[1].strip() for line in Path('/etc/xiaoa-hub.env').read_text().splitlines() "
+        "if line.startswith('AGENT_SERVER_PORT=')]; port=int(ports[-1]); "
+        "assert 1 <= port <= 65535; "
+        f"context=ssl.create_default_context(cafile={REMOTE_ROOT + '/data/hub-tls/hub.crt'!r}); "
+        "context.check_hostname=False; "
+        "opener=build_opener(ProxyHandler({}),HTTPSHandler(context=context)); "
+        f"request=Request('https://127.0.0.1:'+str(port)+'/api/schedule'+{path!r},method={method!r},"
+        f"data={json.dumps(payload, ensure_ascii=True).encode('utf-8')!r} if {payload is not None!r} else None,"
+        "headers={'Content-Type':'application/json'}); "
+        "response=opener.open(request,timeout=8); print(response.read().decode('utf-8'))"
+    )
+    with SSHClient(host, username, key_filename=str(key_path)) as client:
+        raw = client.run(
+            f"{_elevation(client)}{REMOTE_ROOT}/.venv/bin/python -c {shlex.quote(code)}", timeout=12,
+        )
+    result = json.loads(raw)
+    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+        raise SSHClientError("云端未返回有效的任务操作结果")
+    return result
+
+
 def sync_runtime_settings(root: str | Path, values: dict[str, str]) -> None:
     """用已登记的专用密钥同步 hub 运行配置并重启服务。
 

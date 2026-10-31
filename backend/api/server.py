@@ -2224,16 +2224,26 @@ def register_schedule_tools(reg: ToolRegistry | None = None) -> None:
         days: list[int] | None = None, kind: str = "remind",
         channel: str = "feishu", datetime: str = "", timezone: str = "",
     ) -> str:
-        task = SCHEDULER.add_task(**_bind_schedule_destination(dict(
+        values = _bind_schedule_destination(dict(
             name=name, text=text, schedule=schedule, time=time,
             days=days or [], kind=kind, location=_automatic_schedule_location(),
             channel=channel, datetime=datetime, timezone=timezone,
-        )))
+        ))
+        if _uses_cloud_schedule():
+            result = await _cloud_schedule_request("POST", payload=values)
+            if not result.get("ok"):
+                return "创建定时任务失败：" + str(result.get("error") or "云端未确认保存")
+            task = result["task"]
+        else:
+            task = SCHEDULER.add_task(**values)
         when = task["datetime"] if task["schedule"] == "once" else task["time"]
         return f"已创建定时任务「{task['name']}」({task['kind']}/{task['schedule']} {when},{task['location']},{task['channel']})"
 
     async def schedule_list() -> str:
-        tasks = [task for task in SCHEDULER.list_tasks() if _owns_channel_schedule(task)]
+        result = await _schedule_tasks_for_runtime()
+        if result.get("cloud_warning"):
+            return result["cloud_warning"]
+        tasks = [task for task in result["tasks"] if _owns_channel_schedule(task)]
         if not tasks:
             return "当前没有定时任务。"
         lines = []
@@ -2247,10 +2257,18 @@ def register_schedule_tools(reg: ToolRegistry | None = None) -> None:
         return "当前定时任务:\n" + "\n".join(lines)
 
     async def schedule_remove(task_id: str) -> str:
-        task = next((item for item in SCHEDULER.list_tasks() if item["id"] == task_id), None)
+        result = await _schedule_tasks_for_runtime()
+        if result.get("cloud_warning"):
+            return result["cloud_warning"]
+        task = next((item for item in result["tasks"] if item["id"] == task_id), None)
         if task is not None and not _owns_channel_schedule(task):
             return "此定时任务属于其他会话，不能删除。"
-        return f"已删除定时任务 {task_id}" if SCHEDULER.remove_task(task_id) else f"未找到定时任务 {task_id}"
+        if task and task.get("location") == "cloud" and _uses_cloud_schedule():
+            result = await _cloud_schedule_request("DELETE", "/" + urllib.parse.quote(task_id, safe=""))
+            ok = result.get("ok", False)
+        else:
+            ok = SCHEDULER.remove_task(task_id)
+        return f"已删除定时任务 {task_id}" if ok else f"未找到定时任务 {task_id}"
 
     reg.register(Tool(
         name="schedule_add",
@@ -4611,7 +4629,6 @@ async def api_cloud_runtime(request: Request, req: CloudRuntimeSyncRequest = Clo
         "AGENT_BAIDU_TTS_SPEED": str(CFG.voice.baidu_tts_speed),
         "AGENT_TTS_VOICE": str(CFG.voice.tts_voice),
         "AGENT_TTS_SPEED": str(CFG.voice.tts_speed),
-        "AGENT_SCHEDULE_TASKS": SCHEDULER.sync_payload(),
     }
     if req.clear_tencent_credentials:
         values["AGENT_CLEAR_TENCENT_CREDENTIALS"] = "1"
@@ -5297,6 +5314,8 @@ def _sync_schedule_to_cloud(force: bool = False) -> str | None:
     has_cloud = any(task.get("location") == "cloud" for task in tasks)
     if not has_cloud and not force:
         return None  # 没有云端任务,无需推送
+    if _uses_cloud_schedule():
+        return None  # Worker CRUD goes to the live hub API, never pushes a stale full table.
     target_path = app_home() / "data" / "cloud-ssh" / "target.json"
     if not target_path.is_file():
         return "尚未连接云端，云端任务不会执行（请先完成一次云端部署）" if has_cloud else None
@@ -5309,11 +5328,40 @@ def _sync_schedule_to_cloud(force: bool = False) -> str | None:
         return f"同步到云端失败：{exc}"
 
 
+def _uses_cloud_schedule() -> bool:
+    return CFG.role.is_worker and bool(CFG.role.hub_url and CFG.role.hub_token)
+
+
+async def _cloud_schedule_request(method: str, path: str = "", payload: dict | None = None) -> dict:
+    # Reuse the enrolled management SSH identity; a worker chat token cannot manage tasks.
+    from backend.core import cloud_deploy
+    return await asyncio.to_thread(
+        cloud_deploy.schedule_request, app_home(), CFG.role.hub_url, method, path, payload,
+    )
+
+
 @app.get("/api/schedule")
 async def api_schedule_list(request: Request) -> dict:
     if not _can_manage_runtime(request):
         raise HTTPException(status_code=403, detail="定时任务需要本机或已登录的云端管理员管理")
-    return {"ok": True, "tasks": SCHEDULER.list_tasks()}
+    return await _schedule_tasks_for_runtime()
+
+
+async def _schedule_tasks_for_runtime() -> dict:
+    tasks = SCHEDULER.list_tasks()
+    if _uses_cloud_schedule():
+        try:
+            result = await _cloud_schedule_request("GET")
+            if (not result.get("ok") or not isinstance(result.get("tasks"), list)
+                    or any(not isinstance(task, dict) or not task.get("id") for task in result["tasks"])):
+                raise ValueError("云端未返回有效的任务列表")
+            # Cloud owns cloud tasks, including their deletion and completion state.
+            tasks = [task for task in tasks if task.get("location") != "cloud"]
+            tasks += [task for task in result["tasks"] if task.get("location") == "cloud"]
+        except Exception:
+            return {"ok": True, "tasks": tasks,
+                    "cloud_warning": "云端任务读取失败，当前仅显示本机记录，请检查云端连接后刷新。"}
+    return {"ok": True, "tasks": tasks}
 
 
 @app.get("/api/schedule/recipients")
@@ -5353,6 +5401,8 @@ async def api_schedule_add(req: ScheduleTaskRequest, request: Request) -> dict:
     try:
         task_data = req.model_dump(exclude={"id", "location"})
         task_data["location"] = _automatic_schedule_location()
+        if _uses_cloud_schedule():
+            return await _cloud_schedule_request("POST", payload=task_data)
         task = SCHEDULER.add_task(**task_data)
         warning = await asyncio.to_thread(_sync_schedule_to_cloud)
         result = {"ok": True, "task": task}
@@ -5370,7 +5420,14 @@ async def api_schedule_update(task_id: str, req: ScheduleTaskRequest, request: R
     try:
         task_data = req.model_dump(exclude={"id", "location"})
         task_data["location"] = _automatic_schedule_location()
+        if _uses_cloud_schedule() and not any(
+                task["id"] == task_id and task.get("location") == "local"
+                for task in SCHEDULER.list_tasks()):
+            return await _cloud_schedule_request("PUT", "/" + urllib.parse.quote(task_id, safe=""),
+                                                 req.model_dump(exclude_unset=True, exclude={"id", "location"}))
         previous = next((task for task in SCHEDULER.list_tasks() if task["id"] == task_id), {})
+        if previous.get("location") == "local":
+            task_data["location"] = "local"
         if previous.get("channel") != task_data.get("channel") and "channel_target" not in req.model_fields_set:
             task_data.update(channel_target="", channel_account_id="", channel_receive_id_type="open_id", channel_user_id="")
         for field in ("channel_target", "channel_account_id", "channel_receive_id_type", "channel_user_id"):
@@ -5392,6 +5449,13 @@ async def api_schedule_update(task_id: str, req: ScheduleTaskRequest, request: R
 async def api_schedule_remove(task_id: str, request: Request) -> dict:
     if not _can_manage_runtime(request):
         raise HTTPException(status_code=403, detail="定时任务需要本机或已登录的云端管理员管理")
+    if _uses_cloud_schedule() and not any(
+            task["id"] == task_id and task.get("location") == "local"
+            for task in SCHEDULER.list_tasks()):
+        try:
+            return await _cloud_schedule_request("DELETE", "/" + urllib.parse.quote(task_id, safe=""))
+        except Exception:
+            return {"ok": False, "error": "云端任务删除失败，请检查云端连接后重试。"}
     deleted_was_cloud = any(
         task["id"] == task_id and task.get("location") == "cloud"
         for task in SCHEDULER.list_tasks()
@@ -5408,6 +5472,13 @@ async def api_schedule_remove(task_id: str, request: Request) -> dict:
 async def api_schedule_enable(req: ScheduleEnableRequest, request: Request) -> dict:
     if not _can_manage_runtime(request):
         raise HTTPException(status_code=403, detail="定时任务需要本机或已登录的云端管理员管理")
+    if _uses_cloud_schedule() and not any(
+            task["id"] == req.id and task.get("location") == "local"
+            for task in SCHEDULER.list_tasks()):
+        try:
+            return await _cloud_schedule_request("POST", "/enable", req.model_dump())
+        except Exception:
+            return {"ok": False, "error": "云端任务状态修改失败，请检查云端连接后重试。"}
     ok = SCHEDULER.set_enabled(req.id, req.enabled)
     warning = await asyncio.to_thread(_sync_schedule_to_cloud) if ok else None
     result = {"ok": ok, "error": "" if ok else "任务不存在"}

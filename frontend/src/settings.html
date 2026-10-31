@@ -444,14 +444,14 @@
         position: static;
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        grid-template-rows: repeat(2, 36px);
-        grid-auto-rows: 36px;
+        grid-template-rows: none;
+        grid-auto-rows: minmax(40px, auto);
         align-content: start;
         align-items: stretch;
-        height: 84px;
-        min-height: 84px;
-        max-height: 84px;
-        overflow: hidden;
+        height: auto;
+        min-height: 0;
+        max-height: none;
+        overflow: visible;
         gap: 4px;
         margin-bottom: 16px;
         padding: 6px;
@@ -462,10 +462,15 @@
         min-height: 36px;
         padding: 5px 4px;
         text-align: center;
-        white-space: nowrap;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
       .settings-nav button.active { box-shadow: none; }
       .settings-main { max-width: none; }
+    }
+    @media (max-width: 560px) {
+      .settings-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(44px, auto); }
+      .settings-nav button { min-height: 44px; }
     }
     @container (max-width: 680px) {
       .channel-account-row {
@@ -679,6 +684,8 @@
 
   <div class="card">
     <h2>已有任务</h2>
+    <button class="secondary" id="sched_refresh" type="button">刷新任务</button>
+    <div class="msg" id="sched_sync_status" role="status"></div>
     <div class="extension-list" id="sched_list"></div>
     <div class="hint">到点后按任务选择发送到飞书或微信。云端任务由云端渠道发送；本机在线时会同步显示提醒。电脑关机不影响云端执行；云端状态由云端维护，本地记录可能延迟。</div>
   </div>
@@ -1179,6 +1186,7 @@
       }
       if (currentPage === "schedule") {
         loadSchedule().catch(() => {});
+        loadScheduleRecipients().catch(() => {});
       }
       if (["system", "connections"].includes(currentPage) && settingsLoaded) {
         loadReleaseInfo().catch(() => {});
@@ -3472,11 +3480,22 @@
     $("sched_channel").onchange = loadScheduleRecipients;
 
     async function loadSchedule() {
-      await loadScheduleRecipients();
-      const response = await fetch(API + "/api/schedule");
-      const d = await response.json();
-      renderScheduleList(d.tasks || []);
+      if ($("sched_refresh").disabled) return;
+      $("sched_refresh").disabled = true;
+      const status = $("sched_sync_status");
+      try {
+        const response = await fetch(API + "/api/schedule");
+        const d = await response.json();
+        if (!response.ok || !d.ok) throw new Error(d.error || "任务读取失败");
+        renderScheduleList(d.tasks || []);
+        status.textContent = d.cloud_warning || "";
+        status.className = d.cloud_warning ? "msg err" : "msg";
+      } catch (error) {
+        status.textContent = error.message || "任务读取失败，请刷新重试";
+        status.className = "msg err";
+      } finally { $("sched_refresh").disabled = false; }
     }
+    $("sched_refresh").onclick = loadSchedule;
 
     function renderScheduleList(tasks) {
       const list = $("sched_list");
@@ -3530,6 +3549,10 @@
           });
           const d = await r.json();
           if (d.ok) loadSchedule();
+          else {
+            $("sched_sync_status").textContent = d.error || "操作失败，请重试";
+            $("sched_sync_status").className = "msg err";
+          }
         };
         const del = document.createElement("button");
         del.type = "button";
@@ -3538,6 +3561,10 @@
           const r = await fetch(API + "/api/schedule/" + encodeURIComponent(t.id), { method: "DELETE" });
           const d = await r.json();
           if (d.ok) loadSchedule();
+          else {
+            $("sched_sync_status").textContent = d.error || "操作失败，请重试";
+            $("sched_sync_status").className = "msg err";
+          }
         };
         actions.appendChild(toggle);
         actions.appendChild(del);

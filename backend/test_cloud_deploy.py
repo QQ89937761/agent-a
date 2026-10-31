@@ -16,6 +16,58 @@ from deploy.update_hub_env import update_environment
 
 
 class CloudDeployTests(unittest.TestCase):
+    def test_schedule_management_uses_enrolled_ssh_and_live_loopback_api(self):
+        import shlex
+        for method, path, payload in (("GET", "", None), ("POST", "", {"name": "提醒' $()\n", "text": "内容"}),
+                                      ("POST", "/enable", {"id": "a", "enabled": False}),
+                                      ("DELETE", "/a", None)):
+            with self.subTest(method=method, path=path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "data/cloud-ssh").mkdir(parents=True)
+                (root / "data/cloud-ssh/target.json").write_text('{"host":"192.0.2.1","username":"root"}')
+                key = root / "test-key"
+                key.touch()
+                client = MagicMock()
+                client.run.side_effect = ["0", '{"ok":true,"tasks":[]}']
+                with patch.object(cloud_deploy, "identity_path", return_value=key), \
+                     patch.object(cloud_deploy, "SSHClient") as ssh:
+                    ssh.return_value.__enter__.return_value = client
+                    result = cloud_deploy.schedule_request(root, "wss://192.0.2.1:1115/worker", method, path, payload)
+                self.assertTrue(result["ok"])
+                ssh.assert_called_once_with("192.0.2.1", "root", key_filename=str(key))
+                command = client.run.call_args.args[0]
+                code = shlex.split(command)[-1]
+                request = MagicMock()
+                response = MagicMock()
+                response.read.return_value = b'{"ok":true}'
+                opener = MagicMock()
+                opener.open.return_value = response
+                with patch("ssl.create_default_context") as tls, \
+                     patch("urllib.request.Request", return_value=request) as req, \
+                     patch("urllib.request.build_opener", return_value=opener), \
+                     patch("urllib.request.ProxyHandler") as proxy, patch("builtins.print"), \
+                     patch("pathlib.Path.read_text", return_value="AGENT_SERVER_PORT=1004\nAGENT_TEST=do-not-print"):
+                    exec(compile(code, "<remote-schedule-request>", "exec"), {})
+                req.assert_called_once_with("https://127.0.0.1:1004/api/schedule" + path,
+                                            method=method, data=json.dumps(payload).encode() if payload is not None else None,
+                                            headers={"Content-Type": "application/json"})
+                tls.assert_called_once_with(cafile="/opt/xiaoa/data/hub-tls/hub.crt")
+                proxy.assert_called_once_with({})
+                opener.open.assert_called_once_with(request, timeout=8)
+
+    def test_schedule_management_rejects_other_hub_and_path_injection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data/cloud-ssh").mkdir(parents=True)
+            (root / "data/cloud-ssh/target.json").write_text('{"host":"192.0.2.1","username":"root"}')
+            with patch.object(cloud_deploy, "SSHClient") as ssh:
+                for url, path in (("wss://192.0.2.2:1004/worker", ""),
+                                  ("wss://192.0.2.1:1004/worker", "/a; touch /tmp/test"),
+                                  ("file:///tmp/test", "")):
+                    with self.subTest(url=url, path=path), self.assertRaises((ValueError, RuntimeError)):
+                        cloud_deploy.schedule_request(root, url, "GET", path)
+                ssh.assert_not_called()
+
     def test_desktop_model_sync_clears_only_the_browser_model_override(self):
         from deploy.update_hub_env import reset_saved_model_settings
         import os
