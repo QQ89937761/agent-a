@@ -31,6 +31,47 @@ def require(condition, detail):
         raise RuntimeError(str(detail))
 
 
+def smoke_desktop_worker(command, *, env, cwd, startupinfo=None):
+    """Verify the frozen input worker without moving the mouse or typing text."""
+    import queue
+    from multiprocessing.shared_memory import SharedMemory
+    memory = SharedMemory(create=True, size=520)
+    memory.buf[:] = bytes(520)
+    with tempfile.TemporaryFile() as diagnostics:
+        process = None
+        try:
+            process = subprocess.Popen([*command, "--desktop-worker"], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=diagnostics,
+                                       env=env, cwd=cwd, startupinfo=startupinfo)
+            replies = queue.Queue()
+            def read():
+                for line in process.stdout:
+                    replies.put(json.loads(line))
+            reader = threading.Thread(target=read, daemon=True)
+            reader.start()
+            process.stdin.write((json.dumps({"memory": memory.name}) + "\n").encode())
+            for action, expected in (({"kind": "eval", "name": "eval", "args": [], "kwargs": {}},
+                                      {"error": "Unsupported desktop action"}),
+                                     ({"kind": "input", "name": "typewrite", "args": [""], "kwargs": {}},
+                                      {"result": None})):
+                process.stdin.write((json.dumps({"action": action}) + "\n").encode())
+                process.stdin.flush()
+                require(replies.get(timeout=20) == expected, "Frozen input worker returned an invalid reply")
+            process.stdin.close()
+            require(process.wait(timeout=3) == 0, "Frozen input worker did not exit on parent EOF")
+            reader.join(timeout=3)
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=3)
+                for stream in (process.stdin, process.stdout):
+                    stream.close()
+            memory.close()
+            memory.unlink()
+    print("PASS frozen desktop action process: rejected code, empty input, parent EOF", flush=True)
+
+
 def channel_controls(payload):
     local = payload.get("local") if isinstance(payload, dict) else None
     return {source: local.get(source) for source in ("weixin", "feishu")} if isinstance(local, dict) else None
@@ -173,6 +214,7 @@ def main():
                     and all(isinstance(reply.get("result"), dict) for reply in replies),
                     "Frozen reader did not return two matched query results")
             print("PASS frozen read-only UIA process: inherited pipes and two requests", flush=True)
+            smoke_desktop_worker([str(query_exe)], env=env, cwd=home, startupinfo=startup)
         token = (home / "ui_token.txt").read_text(encoding="utf-8").strip()
         def post(path, payload):
             request = urllib.request.Request(base + path, data=json.dumps(payload).encode(),
