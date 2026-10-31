@@ -106,6 +106,38 @@ class FakeLLM:
 
 
 class WindowHelpersTests(unittest.TestCase):
+    def test_disabled_main_window_exposes_hidden_untitled_dialog_not_ime(self):
+        gui = types.ModuleType("win32gui")
+        gui.IsWindowEnabled = lambda h: h != 10
+        gui.GetWindow = lambda h, flag: {20: 10, 30: 10, 40: 99}.get(h, 0)
+        gui.GetLastActivePopup = lambda h: 20
+        gui.GetClassName = lambda h: "IME" if h == 30 else "#32770"
+        gui.GetWindowText = lambda h: ""
+        gui.IsWindowVisible = lambda h: False
+        gui.GetWindowRect = lambda h: (2000, 100, 2400, 400)
+        gui.EnumWindows = lambda callback, arg: [callback(h, arg) for h in (10, 20, 30, 40)]
+        with patch.dict(sys.modules, {"win32gui": gui}):
+            result = system_control.window_dialog_state(10)
+            self.assertFalse(result["enabled"])
+            self.assertEqual([20], [item["handle"] for item in result["dialogs"]])
+            self.assertFalse(result["dialogs"][0]["visible"])
+            with self.assertRaisesRegex(RuntimeError, "window_blocked"):
+                system_control.focus_window_object(FakeWindow("微信", 10))
+
+    def test_enabled_window_dialog_query_uses_native_popup_fallback_without_enumeration(self):
+        gui = types.ModuleType("win32gui")
+        gui.IsWindowEnabled = lambda h: True
+        gui.GetWindow = lambda h, flag: 0
+        gui.EnumWindows = Mock()
+        popup = Mock(return_value=10)
+        with patch.dict(sys.modules, {"win32gui": gui}), \
+             patch("ctypes.windll", SimpleNamespace(user32=SimpleNamespace(GetLastActivePopup=popup)), create=True):
+            result = system_control.window_dialog_state(10)
+        self.assertTrue(result["enabled"])
+        self.assertEqual([], result["dialogs"])
+        popup.assert_called_once_with(10)
+        gui.EnumWindows.assert_not_called()
+
     def test_minimized_hidden_window_uses_normal_placement_geometry(self):
         window = FakeWindow("微信", 201, (-25600, -25600, 159, 27))
         windows = {201: window}
@@ -213,22 +245,71 @@ class WindowHelpersTests(unittest.TestCase):
             self.assertIs(visible, system_control.resolve_window(gw, "Hidden app"))
             self.assertEqual([], system_control.find_hidden_main_windows(gw))
 
-    def test_hidden_restore_uses_native_show_without_relaunch(self):
-        window = FakeWindow("Hidden app", 1, (0, 0, 800, 600))
-        visible = []
+    def test_hidden_restore_uses_owner_activation_and_never_native_show(self):
+        window = FakeWindow("微信", 1, (0, 0, 800, 600))
         gui = types.ModuleType("win32gui")
         gui.IsWindow = lambda h: True
-        gui.IsWindowVisible = lambda h: bool(visible)
-        gui.ShowWindow = lambda h, mode: visible.append((h, mode))
-        con = types.ModuleType("win32con")
-        con.SW_SHOW, con.SW_RESTORE = 5, 9
-        auto = types.ModuleType("uiautomation")
-        auto.ControlFromHandle = Mock(side_effect=RuntimeError("no UIA"))
-        with patch.dict(sys.modules, {"win32gui": gui, "win32con": con, "uiautomation": auto}):
+        gui.IsWindowVisible = Mock(side_effect=[False, True, True])
+        gui.ShowWindow = Mock()
+        native = types.ModuleType("win32process")
+        native.GetWindowThreadProcessId = lambda h: (1, 42)
+        process = SimpleNamespace(name=lambda: "Weixin.exe", exe=lambda: "C:/Weixin/Weixin.exe")
+        with patch.dict(sys.modules, {"win32gui": gui, "win32process": native}), \
+             patch.dict(sys.modules, {"psutil": SimpleNamespace(Process=lambda pid: process)}), \
+             patch.object(Path, "is_file", return_value=True), \
+             patch.object(system_control.os, "startfile", create=True) as launch:
             result = system_control.focus_window_object(window)
-        self.assertEqual([(1, 5), (1, 9)], visible)
+        launch.assert_called_once_with(str(Path("C:/Weixin/Weixin.exe")))
+        gui.ShowWindow.assert_not_called()
         self.assertEqual(["activate"], window.calls)
         self.assertFalse(result["window"]["hidden"])
+
+    def test_hidden_unknown_process_cannot_be_relaunched_or_exposed(self):
+        window = FakeWindow("Hidden app", 1)
+        native = SimpleNamespace(GetWindowThreadProcessId=lambda h: (1, 42))
+        process = SimpleNamespace(name=lambda: "python.exe", exe=lambda: "C:/Python/python.exe")
+        with patch.object(system_control, "window_hidden", return_value=True), \
+             patch.dict(sys.modules, {"win32process": native, "win32gui": types.ModuleType("win32gui")}), \
+             patch.dict(sys.modules, {"psutil": SimpleNamespace(Process=lambda pid: process)}), \
+             patch.object(system_control.os, "startfile", create=True) as launch:
+            with self.assertRaisesRegex(RuntimeError, "hidden_window_requires_app_activation"):
+                system_control.focus_window_object(window)
+        launch.assert_not_called()
+        self.assertEqual([], window.calls)
+
+    def test_known_app_window_cannot_match_browser_title(self):
+        browser = FakeWindow("多微信/飞书共享记忆 - Microsoft Edge", 10)
+        app = FakeWindow("微信", 20)
+        gw = fake_window_module([browser])
+        with patch.object(system_control, "_window_process_name", return_value="msedge.exe"), \
+             patch.object(system_control, "find_hidden_main_windows", return_value=[app]):
+            self.assertIs(app, system_control.resolve_window(gw, "微信"))
+        with patch.object(system_control, "_window_process_name", return_value="msedge.exe"), \
+             patch.object(system_control, "find_hidden_main_windows", return_value=[]):
+            self.assertIsNone(system_control.resolve_window(gw, "微信"))
+            self.assertIs(browser, system_control.resolve_window(gw, handle=10))
+
+    def test_hidden_activation_stops_when_owner_does_not_restore(self):
+        window = FakeWindow("微信", 1)
+        native = SimpleNamespace(GetWindowThreadProcessId=lambda h: (1, 42))
+        gui = SimpleNamespace(IsWindowVisible=lambda h: False)
+        process = SimpleNamespace(name=lambda: "Weixin.exe", exe=lambda: "C:/Weixin/Weixin.exe")
+        with patch.object(system_control, "window_hidden", return_value=True), \
+             patch.dict(sys.modules, {"win32process": native, "win32gui": gui}), \
+             patch.dict(sys.modules, {"psutil": SimpleNamespace(Process=lambda pid: process)}), \
+             patch.object(Path, "is_file", return_value=True), \
+             patch.object(system_control.time, "monotonic", side_effect=[0, 2]), \
+             patch.object(system_control.os, "startfile", create=True) as launch:
+            with self.assertRaisesRegex(RuntimeError, "应用未恢复此窗口"):
+                system_control.focus_window_object(window)
+        launch.assert_called_once()
+        self.assertEqual([], window.calls)
+
+    def test_known_office_alias_still_matches_wps_editor(self):
+        window = FakeWindow("report.docx - WPS 文字", 20)
+        with patch.object(system_control, "_window_process_name", return_value="wps.exe"), \
+             patch.object(system_control, "find_hidden_main_windows", return_value=[]):
+            self.assertIs(window, system_control.resolve_window(fake_window_module([window]), "word"))
 
     def test_uia_traversal_budget_rejects_partial_action_candidates(self):
         leaf = SimpleNamespace(GetChildren=lambda: [])
@@ -840,7 +921,8 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before, len(self.pg.actions))
 
     async def test_optional_action_observations_and_prevalidation(self):
-        cases = [("click_coordinate", {"x": 5, "y": 6, "purpose": "test"}),
+        cases = [("move_pointer", {"x": 5, "y": 6, "duration": 0.2}),
+                 ("click_coordinate", {"x": 5, "y": 6, "purpose": "test"}),
                  ("scroll_screen", {"amount": -1}),
                  ("type_text", {"text": "test"}),
                  ("press_hotkey", {"keys": ["ctrl", "s"]})]
@@ -871,6 +953,13 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertIn("capture failed", result["observation_error"])
         self.assertEqual(before + 1, len(self.pg.actions))
+
+    async def test_pointer_observation_failure_does_not_replay_movement(self):
+        self.pg.screenshot_error = RuntimeError("capture failed")
+        result = await self.registry.call("move_pointer", {"x": 20, "y": 30, "observe": "screen"})
+        self.assertTrue(result["ok"])
+        self.assertIn("capture failed", result["observation_error"])
+        self.assertEqual([("move", 20, 30, 0.2)], self.pg.actions)
 
     async def test_registration_guard_exercises_every_computer_tool(self):
         self.assertEqual({
@@ -1001,6 +1090,16 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([("write", "_.CIRCLE", 0.01), ("press", "enter"),
                           ("write", "0,0", 0.01), ("press", "enter"),
                           ("write", "333", 0.01), ("press", "enter")], self.pg.actions)
+
+    async def test_disabled_target_rejects_input_with_dialog_evidence(self):
+        window = FakeWindow("Test app", 88)
+        info = {"handle": 88, "enabled": False, "dialogs": [{"handle": 99, "visible": False}]}
+        with patch.object(system_control, "window_info", return_value=info), \
+             patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}):
+            result = await self.registry.call("type_text", {"handle": 88, "text": "test"})
+        self.assertEqual("window_blocked", result["status"])
+        self.assertEqual(99, result["window"]["dialogs"][0]["handle"])
+        self.assertEqual([], self.pg.actions)
 
     async def test_hotkey_respects_window_and_rejects_invalid_keys(self):
         window = FakeWindow("AutoCAD", 88)
@@ -2258,6 +2357,16 @@ class SystemToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("wps office", queries)
         self.assertFalse(any(query in "小A.docx - WPS Office".lower() for query in queries))
 
+    async def test_tool_descriptions_allow_task_based_browser_and_command_choice(self):
+        registry = ToolRegistry()
+        with patch.object(system_control, "_IS_WINDOWS", True):
+            system_control.register_tools(registry)
+        tools = registry._tools
+        self.assertNotIn("仅当用户明确", tools["open_url"].description)
+        self.assertNotIn("优先使用", tools["run_command"].description)
+        self.assertIn("自主选择", tools["open_url"].description)
+        self.assertIn("不规定工具顺序", tools["run_command"].description)
+
     async def test_launch_app_does_not_restart_an_open_cad_window(self):
         autocad = FakeWindow("Autodesk AutoCAD 2014 - Drawing1.dwg", 10)
         registry = ToolRegistry()
@@ -2269,6 +2378,24 @@ class SystemToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("检测到已经打开", result)
         startfile.assert_not_called()
         self.assertFalse(system_control.owned_application("autocad"))
+
+    async def test_launch_app_restores_existing_minimized_window_through_control(self):
+        window = FakeWindow("Test app", 10)
+        window.isMinimized = True
+        registry = ToolRegistry()
+        with patch.object(system_control, "_IS_WINDOWS", True), \
+             patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+             patch.object(system_control, "window_hidden", return_value=False), \
+             patch.object(system_control, "acquire_control", new=AsyncMock(return_value=object())), \
+             patch.object(system_control, "wait_for_user_idle", new=AsyncMock(return_value=True)), \
+             patch.object(system_control, "run_controlled", new=AsyncMock(return_value={"focused": True})) as controlled, \
+             patch.object(system_control, "release_control"), \
+             patch.object(system_control.os, "startfile", create=True) as launch:
+            system_control.register_tools(registry)
+            result = await registry.call("launch_app", {"name": "Test app"})
+        self.assertIn("已请求恢复", result)
+        self.assertEqual(system_control.focus_window_object, controlled.await_args.args[1])
+        launch.assert_not_called()
 
     async def test_launch_app_records_only_a_new_autocad_process(self):
         registry = ToolRegistry()

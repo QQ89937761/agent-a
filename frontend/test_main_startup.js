@@ -254,7 +254,8 @@ assert.equal(restarts, 1, "watchdog must still recover a backend that fails afte
 
 const reconnectDelays = [];
 const reconnectContext = vm.createContext({
-  window: {}, connect() {}, setTimeout(_fn, delay) { reconnectDelays.push(delay); },
+  window: {}, reconnectTimer: null, connect() {}, clearTimeout() {},
+  setTimeout(_fn, delay) { reconnectDelays.push(delay); return reconnectDelays.length; },
 });
 const retryStart = html.indexOf("    let connectedOnce =");
 vm.runInContext(html.slice(retryStart, html.indexOf("    let heartbeatTimer", retryStart)), reconnectContext);

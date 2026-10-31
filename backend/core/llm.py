@@ -37,8 +37,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _retry_delay(attempt: int) -> float:
-    """首次请求后的四次退避：2s、4s、6s、8s；共 5 次尝试。"""
-    return 2.0 * attempt
+    """首次请求后的四次退避：3s、6s、12s、20s；共 5 次尝试。"""
+    return (3.0, 6.0, 12.0, 20.0)[min(max(attempt - 1, 0), 3)]
 
 
 def _stream_retry(attempt: int, previous: dict) -> dict:

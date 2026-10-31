@@ -131,7 +131,7 @@ class LLMRetryTests(unittest.IsolatedAsyncioTestCase):
             result = await client.chat([{"role": "user", "content": "test"}])
         self.assertEqual("完成", result["content"])
         self.assertEqual(5, client._client.calls)
-        self.assertEqual([2.0, 4.0, 6.0, 8.0], [call.args[0] for call in sleep.await_args_list])
+        self.assertEqual([3.0, 6.0, 12.0, 20.0], [call.args[0] for call in sleep.await_args_list])
 
     async def test_fifth_transient_failure_is_reported(self):
         client = LLMClient.__new__(LLMClient)
@@ -155,7 +155,7 @@ class LLMRetryTests(unittest.IsolatedAsyncioTestCase):
                     [{"role": "user", "content": "test"}]
                 )
             ]
-        sleep.assert_awaited_once_with(2.0)
+        sleep.assert_awaited_once_with(3.0)
         retry = events.pop(0)
         self.assertEqual("retry", retry[0])
         self.assertEqual(2, retry[1]["attempt"])

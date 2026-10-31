@@ -56,6 +56,33 @@ class DesktopRuntimeTests(unittest.IsolatedAsyncioTestCase):
             action.__module__ = "backend.modules.computer.computer_module"
             self.registry.tool(name, name, {}, side_effect=True)(action)
 
+    async def test_disabled_main_window_returns_desktop_and_dialog_without_activation(self):
+        self.info.update(enabled=False, dialogs=[{"handle": 20, "visible": False, "title": ""}])
+        with patch.object(runtime.system_control, "acquire_control", new=AsyncMock()) as acquire:
+            result = await self.observe(activate=True)
+        self.assertEqual("window_blocked", result["status"])
+        self.assertEqual(20, result["window"]["dialogs"][0]["handle"])
+        self.assertEqual(1, self.captures)
+        self.assertEqual(0, self.queries)
+        self.assertNotIn("observation_id", result)
+        acquire.assert_not_awaited()
+
+    async def test_dialog_appearing_after_observation_stops_plan_before_input(self):
+        self.info.update(enabled=True, dialogs=[])
+        observed = await self.observe()
+        self.info.update(enabled=False, dialogs=[{"handle": 20, "visible": True}])
+        result = await self.execute([self.action()], observed)
+        self.assertEqual("window_changed", result["status"])
+        self.assertEqual(0, result["completed"])
+        self.assertEqual([], self.calls)
+
+    async def test_navigation_choices_include_focus_escape_and_search(self):
+        for keys in (["tab"], ["shift", "tab"], ["esc"], ["ctrl", "f"]):
+            observed = await self.observe()
+            result = await self.execute([self.action("press_hotkey", keys=keys)], observed)
+            self.assertEqual("steps_completed", result["status"], result)
+            self.assertEqual(keys, self.calls[-1][1]["keys"])
+
     async def observe(self, **kwargs):
         return await self.registry.call("desktop_observe", {"handle": 10, **kwargs})
 

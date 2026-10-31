@@ -16,6 +16,7 @@ import asyncio
 import contextvars
 from contextlib import nullcontext
 import logging
+import json
 import os
 import re
 import subprocess
@@ -230,7 +231,7 @@ _KNOWN_WINDOW_PROCESSES = {
     "钉钉": {"dingtalk.exe"}, "qq": {"qq.exe"},
     "vscode": {"code.exe"}, "code": {"code.exe"},
     "wps": {"wps.exe", "et.exe", "wpp.exe"},
-    "word": {"winword.exe"}, "excel": {"excel.exe"}, "ppt": {"powerpnt.exe"},
+    "word": {"winword.exe", "wps.exe"}, "excel": {"excel.exe", "et.exe"}, "ppt": {"powerpnt.exe", "wpp.exe"},
     "codex": {"codex.exe", "chatgpt.exe"}, "chatgpt": {"codex.exe", "chatgpt.exe"},
     "小a": {"xiaoa.exe"}, "xiaoa": {"xiaoa.exe"},
 }
@@ -313,6 +314,55 @@ def find_hidden_main_windows(gw: Any, title: str = "", handle: int | None = None
         return []
 
 
+def window_dialog_state(handle: int) -> dict[str, Any]:
+    """Read native ownership/disabled state without messaging or waking the app."""
+    try:
+        import win32gui
+        enabled = bool(win32gui.IsWindowEnabled(handle))
+        owner = int(win32gui.GetWindow(handle, 4) or 0)  # GW_OWNER
+        get_popup = getattr(win32gui, "GetLastActivePopup", None)
+        if get_popup is None:
+            import ctypes
+            from ctypes import wintypes
+            get_popup = ctypes.windll.user32.GetLastActivePopup
+            get_popup.argtypes = [wintypes.HWND]
+            get_popup.restype = wintypes.HWND
+        popup = int(get_popup(handle) or 0)
+        dialogs = []
+        seen = set()
+        def collect(hwnd):
+            if not hwnd or hwnd == handle or hwnd in seen or len(dialogs) >= 12:
+                return
+            seen.add(hwnd)
+            current = hwnd
+            for _ in range(8):
+                current = int(win32gui.GetWindow(current, 4) or 0)
+                if not current or current == handle:
+                    break
+            if current != handle:
+                return
+            kind = win32gui.GetClassName(hwnd)
+            if kind.casefold() in {"ime", "msctfime ui", "tooltips_class32"}:
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            dialogs.append({"handle": int(hwnd), "title": win32gui.GetWindowText(hwnd)[:300],
+                            "class_name": kind, "visible": bool(win32gui.IsWindowVisible(hwnd)),
+                            "enabled": bool(win32gui.IsWindowEnabled(hwnd)),
+                            "rect": {"x": left, "y": top, "width": right-left, "height": bottom-top}})
+        collect(popup)
+        if not enabled:
+            # Hidden/untitled modal dialogs are omitted by ordinary titled inventories.
+            def visit(hwnd, _):
+                try:
+                    collect(hwnd)
+                except Exception:
+                    pass  # Windows may close while enumerating.
+            win32gui.EnumWindows(visit, None)
+        return {"enabled": enabled, "owner": owner, "dialogs": dialogs}
+    except Exception:
+        return {}  # Unknown is not evidence that the window is disabled.
+
+
 def window_info(window: Any) -> dict[str, Any]:
     """把 pygetwindow 对象压成有界、可序列化的结果。"""
     handle = int(getattr(window, "_hWnd", 0) or 0)
@@ -342,6 +392,7 @@ def window_info(window: Any) -> dict[str, Any]:
         "active": bool(getattr(window, "isActive", False)),
         "minimized": minimized,
         "hidden": window_hidden(window),
+        **(window_dialog_state(handle) if handle else {}),
         "rect": {
             "x": left, "y": top, "width": width, "height": height,
         },
@@ -449,27 +500,29 @@ def resolve_window(gw: Any, title: str = "", handle: int | None = None, *, exact
         queries = window_queries(title)
         if not queries:
             return None
-        if unique:
-            matches = [w for w in windows if str(w.title).strip().casefold() in queries]
-            if not matches and not exact:
-                matches = [w for w in windows if any(q in str(w.title).casefold() for q in queries)]
-            if not matches:
-                matches = find_hidden_main_windows(gw, title, exact=exact)
-            return matches[0] if len(matches) == 1 else None
-        # Preserve query priority and Z-order: do not aggregate aliases before
-        # choosing a result, which is important for multi-window applications.
-        matches = []
-        for query in queries:
-            matches = [w for w in windows if str(w.title).strip().casefold() == query]
-            if matches:
-                break
-        if not matches and not exact:
+        known = _KNOWN_WINDOW_PROCESSES.get(title.strip().casefold(), set())
+        def eligible(window):
+            # A browser's page title is not evidence that it owns a desktop app.
+            process = _window_process_name(window) if known else ""
+            return not process or process in known
+        visible = [w for w in windows if any(q in str(w.title).casefold() for q in queries) and eligible(w)]
+        exact_matches = [w for w in visible if str(w.title).strip().casefold() in queries]
+        if exact_matches:
+            if unique:
+                return exact_matches[0] if len(exact_matches) == 1 else None
             for query in queries:
-                matches = [w for w in windows if query in str(w.title).casefold()]
+                matches = [w for w in exact_matches if str(w.title).strip().casefold() == query]
                 if matches:
-                    break
-        if not matches:
-            matches = find_hidden_main_windows(gw, title, exact=exact)
+                    return matches[0]
+        matches = find_hidden_main_windows(gw, title, exact=exact)
+        if not matches and not exact:
+            if unique:
+                matches = [w for w in visible if any(q in str(w.title).casefold() for q in queries)]
+            else:
+                for query in queries:
+                    matches = [w for w in visible if query in str(w.title).casefold()]
+                    if matches:
+                        break
     if unique and len(matches) != 1:
         return None
     return matches[0] if matches else None
@@ -478,16 +531,28 @@ def resolve_window(gw: Any, title: str = "", handle: int | None = None, *, exact
 def focus_window_object(window: Any, *, maximize: bool = False) -> dict[str, Any]:
     """Restore and activate through Win32 only; UIA calls belong in the isolated reader."""
     handle = int(getattr(window, "_hWnd", 0) or 0)
+    if window_dialog_state(handle).get("enabled") is False:
+        raise RuntimeError("window_blocked: 主窗口已禁用，请检查其所属对话框，不能继续点击主窗口")
     if handle and window_hidden(window):
+        # Tray windows must be restored by their owner, not by exposing a hidden
+        # native surface. Only known single-instance applications may be relaunched.
+        import psutil
         import win32gui
-        import win32con
+        import win32process
+        _, pid = win32process.GetWindowThreadProcessId(handle)
+        process = psutil.Process(pid)
+        allowed = set().union(*(_KNOWN_WINDOW_PROCESSES.get(key, set())
+                               for key in ("微信", "飞书", "钉钉", "qq")))
+        executable = Path(process.exe())
+        if process.name().casefold() not in allowed or executable.name.casefold() not in allowed or not executable.is_file():
+            raise RuntimeError("hidden_window_requires_app_activation: 使用应用自身入口或托盘恢复；未强行显示隐藏窗口")
         check_foreground_permission()
-        win32gui.ShowWindow(handle, win32con.SW_SHOW)
-        check_foreground_permission()
-        win32gui.ShowWindow(handle, win32con.SW_RESTORE)
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline and not win32gui.IsWindowVisible(handle):
+        os.startfile(str(executable))
+        deadline = time.monotonic() + 1.5
+        while not win32gui.IsWindowVisible(handle):
             check_foreground_permission()
+            if time.monotonic() >= deadline:
+                raise RuntimeError("hidden_window_requires_app_activation: 应用未恢复此窗口，请重新观察主窗口或使用托盘入口")
             time.sleep(0.05)
     if bool(getattr(window, "isMinimized", False)):
         window.restore()
@@ -973,6 +1038,9 @@ def register_tools(registry: ToolRegistry) -> None:
             existing = resolve_window(gw, title=name)
         except Exception:
             existing = None
+        if existing is not None and (window_hidden(existing) or bool(getattr(existing, "isMinimized", False))):
+            result = await focus_window(handle=int(existing._hWnd))
+            return f"已请求恢复已运行应用:{name}。{json.dumps(result, ensure_ascii=False)}"
         if existing is not None:
             title = str(getattr(existing, "title", "") or name)
             return f"检测到已经打开:{title}。未重复启动;需要切到前台时请使用 focus_window。"
@@ -1080,7 +1148,7 @@ def register_tools(registry: ToolRegistry) -> None:
 
     @registry.tool(
         name="open_url",
-        description="仅当用户明确要求使用系统默认浏览器时打开网址。这不是小A独立浏览器，普通网页及网页自动化默认使用 browser_open。有副作用。",
+        description="在系统默认浏览器打开网址，使用该浏览器自身的登录状态。这不是小A独立浏览器；按任务与现场自主选择open_url、browser_open或桌面操作。有副作用。",
         parameters={
             "type": "object",
             "properties": {"url": {"type": "string"}},
@@ -1097,8 +1165,8 @@ def register_tools(registry: ToolRegistry) -> None:
     @registry.tool(
         name="run_command",
         description=(
-            "在 Windows 命令行执行一条命令并返回输出。用于没有专门工具时的兜底操作。"
-            "打开软件优先使用 launch_app，打开文件优先使用专门的文件工具。命令最长等待60秒。"
+            "在 Windows 命令行执行命令并返回输出，可用于系统查询、文件处理、诊断或任务需要的其他操作。"
+            "按目标自主选择命令、专用接口或界面工具，不规定工具顺序。命令最长等待60秒。"
             "未指定 cwd 时在隔离工作区执行，生成的相对路径文件留在该目录。危险操作,执行前会请求确认。"
         ),
         parameters={
@@ -1166,7 +1234,9 @@ def register_tools(registry: ToolRegistry) -> None:
             focused = await run_controlled(control, focus_window_object, window, maximize=maximize)
             return {"ok": True, "control_mode": "foreground_exclusive", **focused}
         except Exception as e:
-            return {"ok": False, "error": f"聚焦失败：{str(e)[:300]}", "window": window_info(window)}
+            info = window_info(window)
+            return {"ok": False, "status": "window_blocked" if info.get("enabled") is False else "input_target_not_focused",
+                    "error": f"聚焦失败：{str(e)[:300]}", "window": info}
         finally:
             release_control(control)
 

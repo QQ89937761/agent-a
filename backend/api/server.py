@@ -6478,6 +6478,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 continue
 
             mtype = msg.get("type")
+            if mtype == "ping":
+                await send_ws("pong", {})
+                continue
             requested_id = _conversation_id(msg.get("conversation_id"))
             if mtype == "conversation_list":
                 await send_conversation_list()

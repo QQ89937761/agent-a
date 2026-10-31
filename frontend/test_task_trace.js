@@ -142,6 +142,27 @@ update(trace({has_tools: true, status: "stopped"}));
 assert.equal(card.messages.children.length, 1);
 console.log("task trace: message handoff, duplicate snapshots, final reply, stopped/failed history and partial streams passed");
 
+// Local stop must freeze immediately, even if an in-flight running snapshot arrives.
+sent.length = 0;
+run("resetTaskTraces(); taskBusy = false");
+card = update(trace({id: "stop-race", has_tools: true}));
+run("markCurrentTraceStopped()");
+const frozenDuration = card.trace.duration_ms;
+assert.equal(card.trace.status, "stopped");
+assert.equal(intervals.size, 0);
+update(trace({id: "stop-race", has_tools: true, duration_ms: frozenDuration + 5000}));
+assert.equal(card.trace.status, "stopped");
+assert.equal(card.trace.duration_ms, frozenDuration);
+assert.equal(intervals.size, 0);
+update(trace({id: "stop-race", status: "stopped", can_resume: true}));
+card.resumeButton.onclick();
+assert.equal(card.stopRequested, false);
+update(trace({id: "stop-race"}));
+assert.equal(card.trace.status, "running", "explicit continue may restart the clock");
+run("resetTaskTraces()");
+sent.length = 0; ctx.taskBusy = false;
+console.log("task trace: immediate stop, late snapshot and explicit resume passed");
+
 (async () => {
   run("resetTaskTraces();"); log.replaceChildren();
   const value = trace({has_tools: true, status: "stopped", can_resume: true, conversation_id: "conv_bound", events: [

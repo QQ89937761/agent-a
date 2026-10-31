@@ -17,12 +17,21 @@ from backend.modules.computer.computer_module import locate_in_image, parse_coor
 
 class VisualContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_desktop_guidance_does_not_treat_windows_taskbar_as_target_app(self):
-        self.assertIn("Shell_TrayWnd是Windows任务栏，不是目标应用窗口", SYSTEM_PROMPT)
-        self.assertIn("结合返回的全窗口清单和桌面图定位托盘/主窗口", SYSTEM_PROMPT)
+        self.assertIn("Shell_TrayWnd 是任务栏，不是应用主窗口", SYSTEM_PROMPT)
+        self.assertIn("不规定固定第一步或固定操作顺序", SYSTEM_PROMPT)
+        self.assertIn("恢复无效时结合当前画面选择托盘入口", SYSTEM_PROMPT)
 
     async def test_desktop_guidance_prohibits_external_input_script_bypass(self):
         for term in ("code_write/code_run/run_command", "ctypes", "win32gui", "pyautogui", "uiautomation", "不改用外部输入脚本"):
             self.assertIn(term, SYSTEM_PROMPT)
+
+    async def test_tool_choice_is_autonomous_and_vision_is_not_live_video(self):
+        self.assertIn("不预设工具优先级、固定第一步或固定操作顺序", SYSTEM_PROMPT)
+        self.assertIn("不要求先尝试UIA", SYSTEM_PROMPT)
+        self.assertIn("视觉来自工具返回的截图，不是持续视频", SYSTEM_PROMPT)
+        self.assertIn("move_pointer可按duration平滑移动鼠标", SYSTEM_PROMPT)
+        for removed in ("启动软件优先", "操作软件优先结构化控件", "发送文字优先", "操作本机软件界面必须使用内置桌面工具", "仅用户明确要求使用系统默认浏览器"):
+            self.assertNotIn(removed, SYSTEM_PROMPT)
 
     async def test_pixels_and_explicit_normalized_units_without_guessing_or_clamping(self):
         for answer, expected, invalid in (

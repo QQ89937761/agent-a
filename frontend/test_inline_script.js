@@ -124,7 +124,7 @@ if (!html.includes('img.src = "data:image/jpeg;base64," + b64;') ||
     return node;
   }
   function runtime() {
-    const events = [], notifications = [], timers = [], bubbles = [], copies = [];
+    const events = [], notifications = [], timers = [], bubbles = [], copies = [], scheduled = [];
     const oldSpeech = {cancelled: false};
     let speechCancelled = 0, continuousStopped = 0, healthRefreshes = 0;
     const context = vm.createContext({
@@ -136,13 +136,14 @@ if (!html.includes('img.src = "data:image/jpeg;base64," + b64;') ||
       textEl: element(), pendingAttachments: [], pendingDeliveries: new Map(),
       WebSocket: {OPEN: 1}, ws: {readyState: 1},
       clearTimeout: timer => timers.push(timer),
+      setTimeout: (fn, delay) => {scheduled.push({fn, delay}); return 999;},
       addEvent: (...args) => events.push(args), addTaskDuration() {}, refreshHealth() { healthRefreshes++; },
       setBubbleContent: (_bubble, text) => bubbles.push(text),
       addCopyAction: (_bubble, text) => copies.push(text),
       stopContinuousMode() { continuousStopped++; vm.runInContext("continuousActive = false", context); },
     });
     vm.runInContext(`
-      let taskBusy = false, serviceFailed = false;
+      let taskBusy = false, serviceFailed = false, healthRetryTimer = null;
       let continuousActive = true, speakNextReply = true, wakeReplyText = "旧开场白";
       let streamBubble = {}, streamText = "已生成的部分正文", streamSpeech = null;
       let speakSeq = 0, ttsAudio = null, ttsResolve = null, browserSpeechResolve = null;
@@ -160,11 +161,24 @@ if (!html.includes('img.src = "data:image/jpeg;base64," + b64;') ||
     context.oldSpeech = oldSpeech;
     vm.runInContext("streamSpeech = oldSpeech", context);
     return {
-      context, events, notifications, timers, bubbles, copies, oldSpeech,
+      context, events, notifications, timers, bubbles, copies, oldSpeech, scheduled,
       value: source => vm.runInContext(source, context),
       speechCancelled: () => speechCancelled, continuousStopped: () => continuousStopped,
       healthRefreshes: () => healthRefreshes,
     };
+  }
+  {
+    const r = runtime();
+    r.context.setServiceFailed("temporary model failure");
+    r.context.setServiceFailed("second failure");
+    assert.equal(r.scheduled.length, 1, "service errors share one health retry");
+    assert.equal(r.scheduled[0].delay, 3000);
+    r.scheduled[0].fn();
+    assert.equal(r.healthRefreshes(), 1);
+    assert.equal(r.value("healthRetryTimer"), null);
+    r.context.setServiceHealthy();
+    assert.equal(r.value("serviceFailed"), false);
+    assert.equal(r.context.connEl.className, "conn ok");
   }
   for (const data of [
     {where: "llm.config"}, // old backend, without client_id or terminal marker
@@ -183,7 +197,7 @@ if (!html.includes('img.src = "data:image/jpeg;base64," + b64;') ||
     assert.equal(c.sendBtn.attributes["aria-label"], "发送");
     assert.equal(c.sendBtn.classList["stop-mode"], false);
     assert(c.sendBtn.innerHTML.includes("<path"), "must restore send icon");
-    assert.equal(c.sendBtn.disabled, failed);
+    assert.equal(c.sendBtn.disabled, false, "a model error must not lock a connected sender");
     assert.equal(r.value("serviceFailed"), failed, "config errors must not turn the connection red");
     assert.equal(c.connEl.className, failed ? "conn" : "conn ok");
     assert.equal(c.statusEl.textContent, failed ? "服务异常" : "");
@@ -266,7 +280,7 @@ if (!html.includes('case "interjected":') ||
     !html.includes("function stopCurrentTask()") ||
     !html.includes("taskBusy && !hasActionInput()") ||
     !html.includes('stopping ? "停止任务" : taskBusy ? "插入新要求" : "发送"') ||
-    !html.includes('sendBtn.disabled = !stopping && !connEl.classList.contains("ok")') ||
+    !html.includes('sendBtn.disabled = !stopping && !(ws && ws.readyState === WebSocket.OPEN)') ||
     html.includes('id="stop"')) {
   throw new Error("running task interjection or merged stop/send action missing");
 }

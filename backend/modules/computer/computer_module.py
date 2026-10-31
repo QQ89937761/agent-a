@@ -1106,6 +1106,10 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         return observation_to_desktop(x, y, geometry)
 
     async def ensure_target_focus(control, target, handle):
+        info = system_control.window_info(target)
+        if info.get("enabled") is False:
+            return {"ok": False, "status": "window_blocked", "window": info,
+                    "error": "目标主窗口被禁用，请检查其所属对话框；未向主窗口输入或强行切换焦点。"}
         if _foreground_window_handle() != handle:
             if target.isMinimized:
                 await system_control.run_controlled(control, target.restore)
@@ -1608,10 +1612,11 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
 
     @registry.tool(
         name="move_pointer",
-        description="把鼠标移动到指定屏幕坐标，不点击。",
+        description="平滑移动鼠标到目标位置，不点击；duration控制移动时间，可用于悬停。可选observe返回移动后的画面，不代表持续视频。",
         parameters={
             "type": "object",
             "properties": {
+                **observe_schema,
                 "screenshot_path": screenshot_path_schema,
                 "x": {"type": "integer"}, "y": {"type": "integer"},
                 "coordinate_space": {"type": "string", "enum": ["pixels", "normalized_1000"]},
@@ -1621,7 +1626,10 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         },
         side_effect=True,
     )
-    async def move_pointer(x: int, y: int, duration: float = 0.2, screenshot_path: str = "", coordinate_space: str = "pixels") -> dict[str, Any]:
+    async def move_pointer(x: int, y: int, duration: float = 0.2, screenshot_path: str = "", coordinate_space: str = "pixels",
+        observe: str = "none", observe_region: dict | None = None,
+    ) -> dict[str, Any]:
+        observation_region = await _observation_region(observe, observe_region)
         control = await _begin_foreground()
         if isinstance(control, dict):
             return control
@@ -1630,7 +1638,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             x, y = validate_point(x, y, await _screen_bounds())
             duration = max(0.0, min(float(duration), 5.0))
             await system_control.run_controlled(control, pyautogui.moveTo, x, y, duration=duration)
-            return {"ok": True, "control_mode": "foreground_exclusive", "x": x, "y": y, "duration": duration}
+            return await _observe_after({"ok": True, "control_mode": "foreground_exclusive", "x": x, "y": y, "duration": duration}, observe, observation_region)
         finally:
             _end_foreground(control)
 

@@ -2383,6 +2383,33 @@ class ServerFeatureTests(unittest.IsolatedAsyncioTestCase):
             server._COMPLETED_CLIENT_INPUTS.clear()
             server._COMPLETED_CLIENT_INPUTS.update(old_completed)
 
+    async def test_websocket_ping_replies_without_starting_a_task(self):
+        class Socket:
+            headers = {"origin": "", "host": "127.0.0.1:1985"}
+            query_params = {}
+            cookies = {}
+            client = SimpleNamespace(host="127.0.0.1")
+            received = False
+            sent = []
+
+            async def accept(self):
+                pass
+
+            async def send_text(self, payload):
+                self.sent.append(json.loads(payload))
+
+            async def receive_text(self):
+                if self.received:
+                    raise WebSocketDisconnect()
+                self.received = True
+                return json.dumps({"type": "ping"})
+
+        socket = Socket()
+        with patch.object(server, "Agent") as agent:
+            await server.ws_endpoint(socket)
+        self.assertIn({"type": "pong", "data": {}}, socket.sent)
+        agent.return_value.run.assert_not_called()
+
     async def test_websocket_delivery_ack_duration_and_duplicate_suppression(self):
         class FakeAgent:
             runs = 0

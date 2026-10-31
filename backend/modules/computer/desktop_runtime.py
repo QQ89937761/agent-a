@@ -18,7 +18,7 @@ _ACTIONS = {
     "press_hotkey": {"keys"},
 }
 _SUBMIT = re.compile(r"发送|提交|付款|转账|删除|清空|send|submit|pay|purchase|delete|remove", re.I)
-_NAVIGATION_KEYS = {("ctrl", "a"), ("ctrl", "c"), ("home",), ("end",), ("left",), ("right",), ("up",), ("down",), ("pageup",), ("pagedown",)}
+_NAVIGATION_KEYS = {("ctrl", "a"), ("ctrl", "c"), ("home",), ("end",), ("left",), ("right",), ("up",), ("down",), ("pageup",), ("pagedown",), ("tab",), ("shift", "tab"), ("esc",), ("ctrl", "f")}
 _INPUT_TYPES = {"EditControl", "DocumentControl", "ComboBoxControl"}
 
 
@@ -48,7 +48,7 @@ def window_identity(window) -> dict:
 
 def same_window(before: dict, after: dict) -> bool:
     return all(before.get(key) == after.get(key) for key in
-               ("handle", "title", "process_id", "class_name", "rect", "minimized", "hidden"))
+               ("handle", "title", "process_id", "class_name", "rect", "minimized", "hidden", "enabled", "dialogs"))
 
 
 def matching_controls(controls: list, selector: dict) -> list:
@@ -142,7 +142,21 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
                     result["image_error"] = type(exc).__name__
                 timings["capture_ms"] = round((time.perf_counter() - start) * 1000)
             return result
-        before_activation = await asyncio.to_thread(identity, target) if activate else None
+        info = await asyncio.to_thread(identity, target)
+        if info.get("enabled") is False:
+            result = {"ok": False, "status": "window_blocked", "window": info, "windows": windows,
+                      "next": "主窗口被禁用，可能有设置/确认等模态窗口占用输入；检查window.dialogs的句柄、可见性和位置，结合当前桌面选择对话框重新观察。未显示的对话框不强行ShowWindow，不继续点击主窗口。",
+                      "timings": timings}
+            if include_image and not interrupted():
+                try:
+                    result.update(await capture(None))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    result["image_status"] = "capture_failed"
+                    result["image_error"] = type(exc).__name__
+            return result
+        before_activation = info if activate else None
         if activate:
             def activation_failure(status, **extra):
                 return {"ok": False, "status": status, "window": before_activation,

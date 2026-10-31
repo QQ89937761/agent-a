@@ -1191,13 +1191,15 @@
     let connectedOnce = false, reconnectDelay = 300;
     const RECONNECT_MIN = 1000, RECONNECT_MAX = 15000;
     function scheduleReconnect() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       const delay = reconnectDelay;
       reconnectDelay = connectedOnce ? Math.min(delay * 2, RECONNECT_MAX)
         : (delay < 500 ? 500 : 1000);
       reconnectTimer = setTimeout(connect, delay);
     }
     if (window.bridge && bridge.onBackendReady) bridge.onBackendReady(() => void connect());
-    let heartbeatTimer = null;   // 轻量心跳:定时发个 ping 让死连接尽快暴露(后端忽略未知类型)
+    let lastSocketMessageAt = 0;
+    let heartbeatTimer = null;   // 轻量心跳:用 ping/pong 发现半开连接
     const MAX_DELIVERY_ATTEMPTS = 5;
     const DELIVERY_RETRY_DELAYS = [1200, 2200, 4000, 7000, 10000];
     const pendingDeliveries = new Map();
@@ -1526,6 +1528,10 @@
       serviceFailed = true;
       connEl.className = "conn";
       connEl.title = `当前任务服务异常：${String(message || "未知错误").slice(0, 120)}`;
+      if (!healthRetryTimer) healthRetryTimer = setTimeout(() => {
+        healthRetryTimer = null;
+        void refreshHealth();
+      }, 3000);
     }
     function setServiceHealthy() {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1837,8 +1843,16 @@
       }
       ws = socket;
       connecting = false;
+      const handshakeTimer = setTimeout(() => {
+        if (ws === socket && socket.readyState === WebSocket.CONNECTING) {
+          socket.onclose();
+          socket.close();
+        }
+      }, 10000);
       socket.onopen = () => {
+        clearTimeout(handshakeTimer);
         if (ws !== socket) { socket.close(); return; }
+        lastSocketMessageAt = Date.now();
         historyLoaded = false; // Replay authoritative persisted trails after every reconnect.
         refreshHealth();
         setConn(true);
@@ -1850,6 +1864,7 @@
         setTimeout(flushPendingDeliveries, 350);
       };
       socket.onclose = () => {
+        clearTimeout(handshakeTimer);
         if (ws !== socket) return;
         ws = null;
         if (window.bridge && window.bridge.setForegroundNotice) window.bridge.setForegroundNotice(false);
@@ -1870,9 +1885,14 @@
         if (continuousActive) stopContinuousMode(false);
         scheduleReconnect();
       };
-      socket.onerror = () => { if (ws === socket) setConn(false); };
+      socket.onerror = () => {
+        if (ws !== socket) return;
+        socket.onclose();
+        socket.close();
+      };
       socket.onmessage = (e) => {
         if (ws !== socket) return;
+        lastSocketMessageAt = Date.now();
         // 一帧坏数据不能静默吞掉整条事件流(尤其别把 done 丢了卡"工作中")。
         let ev;
         try {
@@ -1881,6 +1901,7 @@
           addEvent("error", "收到一条无法解析的消息,已跳过。");
           return;
         }
+        if (ev.type === "pong") return;
         if (ev.type === "foreground_control") {
           if (window.bridge && window.bridge.setForegroundNotice) {
             window.bridge.setForegroundNotice(Boolean(ev.data?.active));
@@ -1925,14 +1946,20 @@
 
     function startHeartbeat() {
       stopHeartbeat();
-      // 每 25s 发个 app 层 ping。后端是 if/elif 结构,未知类型直接忽略,不会报错;
-      // 作用是让半开的死连接尽快在 send 时暴露 → 触发 onclose → 走重连。
+      // Require a response: send() succeeding does not prove a half-open socket is alive.
       heartbeatTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try { ws.send(JSON.stringify({ type: "ping" })); } catch (_) {}
+        const socket = ws;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - lastSocketMessageAt > 45000) {
+          socket.onclose();
+          socket.close();
+          return;
         }
-      }, 25000);
+        try { socket.send(JSON.stringify({ type: "ping" })); }
+        catch (_) { socket.onerror(); }
+      }, 15000);
     }
+
     function stopHeartbeat() {
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     }
@@ -2279,6 +2306,16 @@
       if (!running && traceClock) { clearInterval(traceClock); traceClock = null; }
     }
 
+    function markCurrentTraceStopped() {
+      const card = currentTaskCard;
+      if (!card || !["running", "waiting"].includes(card.trace.status)) return;
+      card.stopRequested = true;
+      const trace = {...card.trace, status: "stopped",
+        duration_ms: Math.max(card.trace.duration_ms || 0, Date.now() - card.trace.started_at)};
+      updateTaskTrace(trace);
+      updateTraceClock();
+    }
+
     function resetTaskTraces() {
       if (traceClock) clearInterval(traceClock);
       traceClock = null;
@@ -2351,6 +2388,7 @@
           type: "continue_task", conversation_id: card.conversationId,
           task_trace_id: card.trace.id, provider_id: selectedProviderId, model: selectedModel,
         }));
+        card.stopRequested = false;
         card.resumePending = true; card.resumeButton.disabled = true;
         card.resumeButton.textContent = "正在恢复断点…";
         setBusy(true); statusEl.textContent = "正在恢复断点…";
@@ -2386,6 +2424,9 @@
           resumePending: false, liveNode: null, resultShown: false};
         resumeButton.onclick = () => continueTaskTrace(card);
         taskTraceCards.set(trace.id, card);
+      }
+      if (card.stopRequested && ["running", "waiting"].includes(trace.status)) {
+        trace = {...trace, status: "stopped", duration_ms: card.trace.duration_ms};
       }
       const wasActive = ["running", "waiting"].includes(card.trace.status);
       card.trace = trace;
@@ -2862,6 +2903,7 @@
           }
           break;
         case "stopped":
+          markCurrentTraceStopped();
           if (window.bridge && window.bridge.clearFloatAlert) window.bridge.clearFloatAlert("approval");
           cancelSpeech();
           setBusy(false);
@@ -3050,7 +3092,7 @@
         : '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" /></svg>';
       sendBtn.title = stopping ? "停止任务" : taskBusy ? "插入新要求" : "发送";
       sendBtn.setAttribute("aria-label", sendBtn.title);
-      sendBtn.disabled = !stopping && !connEl.classList.contains("ok");
+      sendBtn.disabled = !stopping && !(ws && ws.readyState === WebSocket.OPEN);
     }
 
     function send(options) {
@@ -3105,9 +3147,11 @@
     }
 
     async function stopCurrentTask() {
+      markCurrentTraceStopped();
       cancelPendingDeliveries();
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "stop" }));
+        try { ws.send(JSON.stringify({ type: "stop" })); }
+        catch (_) { ws.onerror(); }
       }
       stopSpeechPlayback();
       statusEl.textContent = "";
