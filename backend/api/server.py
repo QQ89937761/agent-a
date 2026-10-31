@@ -5940,6 +5940,17 @@ async def ws_endpoint(ws: WebSocket) -> None:
             payload.setdefault("conversation_id", conversation_id)
         await ws.send_text(json.dumps({"type": event_type, "data": payload}, ensure_ascii=False))
 
+    async def foreground_heartbeat() -> None:
+        while True:
+            await asyncio.sleep(1)
+            if system_control.foreground_control_active():
+                try:
+                    await send_ws("foreground_control", {"active": True})
+                except Exception:
+                    return
+
+    notice_heartbeat = asyncio.create_task(foreground_heartbeat())
+
     def runtime_for(conversation_id: str) -> dict | None:
         conversation = DESKTOP_CONVERSATIONS.get(conversation_id)
         if conversation is None:
@@ -6758,6 +6769,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        notice_heartbeat.cancel()
+        await asyncio.gather(notice_heartbeat, return_exceptions=True)
         for state in runtimes.values():
             await _cancel_running_task(state.get("current"))
         for client_id in list(session_client_ids):

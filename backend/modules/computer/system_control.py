@@ -106,14 +106,16 @@ def _escape_foreground(expected: ControlToken | None = None) -> None:
         if expected is not None and control is not expected:
             return  # A late event from an old helper cannot stop a new task.
         session = control.session if control is not None else None
-        if session is None or not control.foreground or session.revoked.is_set():
+        if session is None or not control.foreground:
             return
+        first_escape = not session.revoked.is_set()
         session.revoked.set()
     release_control(control, force=True)
-    try:
-        session.on_escape()
-    except Exception:
-        _LOGGER.exception("failed to stop task after Esc")
+    if first_escape:
+        try:
+            session.on_escape()
+        except Exception:
+            _LOGGER.exception("failed to stop task after Esc")
 
 
 def mark_owned_application(name: str, process_id: int | None = None) -> None:
@@ -164,7 +166,7 @@ def _notify_foreground(token: ControlToken, active: bool) -> None:
 class ControlToken:
     """Capability token for one foreground-control lease."""
 
-    __slots__ = ("worker", "release_requested", "notice_callback", "session", "foreground")
+    __slots__ = ("worker", "release_requested", "notice_callback", "session", "foreground", "abandoned")
 
     def __init__(self) -> None:
         self.worker: asyncio.Task[Any] | None = None
@@ -172,6 +174,7 @@ class ControlToken:
         self.notice_callback = _FOREGROUND_NOTICE.get()
         self.session = _CONTROL_SESSION.get()
         self.foreground = False
+        self.abandoned = False
 
 
 # 用户叫法和真实窗口标题并不总一致（Codex 桌面版当前显示为 ChatGPT）。
@@ -469,8 +472,7 @@ def resolve_window(gw: Any, title: str = "", handle: int | None = None, *, exact
 
 
 def focus_window_object(window: Any, *, maximize: bool = False) -> dict[str, Any]:
-    """Restore the native window before UIA focus; semantic focus alone is not foreground proof."""
-    semantic = False
+    """Restore and activate through Win32 only; UIA calls belong in the isolated reader."""
     handle = int(getattr(window, "_hWnd", 0) or 0)
     if handle and window_hidden(window):
         import win32gui
@@ -485,15 +487,6 @@ def focus_window_object(window: Any, *, maximize: bool = False) -> dict[str, Any
             time.sleep(0.05)
     if bool(getattr(window, "isMinimized", False)):
         window.restore()
-    if handle:
-        try:
-            import uiautomation as auto
-            check_foreground_permission()
-            control = auto.ControlFromHandle(handle)
-            control.SetFocus()
-            semantic = True
-        except Exception:
-            check_foreground_permission()
     check_foreground_permission()
     try:
         window.activate()
@@ -503,7 +496,7 @@ def focus_window_object(window: Any, *, maximize: bool = False) -> dict[str, Any
             raise
     if maximize:
         window.maximize()
-    return {"focused": True, "semantic": semantic, "window": window_info(window)}
+    return {"focused": True, "semantic": False, "window": window_info(window)}
 
 
 def user_idle_seconds() -> float | None:
@@ -612,7 +605,7 @@ def activate_foreground(token: ControlToken) -> None:
 
 
 def release_control(token: ControlToken, *, force: bool = False) -> bool:
-    """Retain a task session; final release waits for any input worker to finish."""
+    """Revoke immediately; keep the input mutex until an uncancellable worker exits."""
     global _CONTROL_OWNER
     with _CONTROL_STATE_LOCK:
         if _CONTROL_OWNER is not token:
@@ -622,6 +615,14 @@ def release_control(token: ControlToken, *, force: bool = False) -> bool:
             return True
         if token.worker is not None:
             token.release_requested = True
+            if force:
+                token.abandoned = True
+                if token.session is not None:
+                    token.session.revoked.set()
+                _CONTROL_OWNER = None
+                if token.foreground:
+                    _notify_foreground(token, False)
+                stop_listener()
             return True
         _CONTROL_OWNER = None
         if token.foreground:
@@ -639,11 +640,13 @@ def _control_worker_done(token: ControlToken, worker: asyncio.Task[Any]) -> None
     except asyncio.CancelledError:
         error = None
     with _CONTROL_STATE_LOCK:
-        if _CONTROL_OWNER is not token or token.worker is not worker:
+        if token.worker is not worker:
             return
         token.worker = None
         should_release = token.release_requested
-        if should_release:
+        if token.abandoned:
+            _CONTROL_LOCK.release()
+        elif _CONTROL_OWNER is token and should_release:
             _CONTROL_OWNER = None
             if token.foreground:
                 _notify_foreground(token, False)
@@ -659,9 +662,10 @@ def foreground_control_active() -> bool:
 
 
 async def run_controlled(
-    token: ControlToken, function: Callable[..., _T], /, *args: Any, **kwargs: Any,
+    token: ControlToken, function: Callable[..., _T], /, *args: Any,
+    timeout: float | None = None, **kwargs: Any,
 ) -> _T:
-    """Run input work without letting coroutine cancellation release its lease early."""
+    """Run bounded input work; cancellation cannot terminate a native worker thread."""
     check_foreground_permission()
     with _CONTROL_STATE_LOCK:
         if _CONTROL_OWNER is not token:
@@ -671,7 +675,21 @@ async def run_controlled(
         worker = asyncio.create_task(asyncio.to_thread(_run_controlled_input, function, args, kwargs))
         token.worker = worker
     worker.add_done_callback(lambda done: _control_worker_done(token, done))
-    return await asyncio.shield(worker)
+    default_timeout = 8.0 if (function is focus_window_object or getattr(function, "__name__", "").startswith(("_uia_", "_focus_semantic_"))) else 5.0
+    timeout_seconds = max(0.1, min(float(timeout if timeout is not None else default_timeout), 30.0))
+    deadline = asyncio.timeout(timeout_seconds)
+    try:
+        async with deadline:
+            return await asyncio.shield(worker)
+    except TimeoutError as exc:
+        if not deadline.expired():
+            raise
+        with _CONTROL_STATE_LOCK:
+            token.abandoned = True
+        release_control(token, force=True)
+        _LOGGER.error("desktop call timed out after %.1fs: %s.%s", timeout_seconds,
+                      getattr(function, "__module__", ""), getattr(function, "__name__", repr(function)))
+        raise TimeoutError("desktop_call_timeout") from exc
 
 
 def _run_controlled_input(function, args, kwargs):
@@ -685,7 +703,7 @@ def _run_controlled_input(function, args, kwargs):
             try:
                 import uiautomation as auto
             except ImportError:
-                return function(*args, **kwargs)  # Existing UIA helpers fall back to visual control.
+                return function(*args, **kwargs)
             with getattr(auto, 'UIAutomationInitializerInThread', nullcontext)():
                 return function(*args, **kwargs)
         return function(*args, **kwargs)

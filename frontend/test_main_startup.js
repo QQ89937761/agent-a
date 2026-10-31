@@ -54,6 +54,7 @@ const context = vm.createContext({
   loadFloatPosition: () => null, lockNavigation() {}, updateChatBackground() {},
   saveFloatPosition() { positionSaves++; }, clearFloatAlert() {}, updateChatShape() {}, app: {quit() {}},
   floatWin: null, chatWin: null, foregroundNoticeWin: null, quitting: false, chatResize: null,
+  setTimeout(fn) { context.noticeTimeout = fn; return 1; }, clearTimeout() { context.noticeTimeout = null; },
 });
 function sourceBetween(start, end) {
   const a = main.indexOf(start);
@@ -78,6 +79,7 @@ assert.equal(notice.ignoreMouse, true);
 assert.equal(notice.forwardMouse, true);
 context.setForegroundNotice(true);
 assert.equal(notice.visible, true);
+assert.equal(typeof context.noticeTimeout, "function", "active notice must arm its recovery watchdog");
 assert.deepEqual(notice.position, [700, 994], "notice stays above the taskbar at bottom center");
 context.screen.getDisplayNearestPoint = () => ({workArea: {x: -1280, y: 60, width: 1280, height: 900}});
 context.positionForegroundNotice();
@@ -86,6 +88,9 @@ context.setForegroundNotice(true);
 assert.equal(notice.visible, true, "repeated active notifications keep desktop notice visible");
 context.setForegroundNotice(false);
 assert.equal(notice.visible, false, "release hides the notice immediately");
+context.setForegroundNotice(true);
+context.noticeTimeout();
+assert.equal(notice.visible, false, "lost heartbeats must hide the notice");
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
 assert(packageJson.build.files.includes("src/foreground_notice.html"), "notice must ship in ASAR");
 const html = fs.readFileSync(path.join(__dirname, "src/index.html"), "utf8");

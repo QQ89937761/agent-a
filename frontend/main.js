@@ -206,9 +206,13 @@ function createForegroundNotice() {
   foregroundNoticeWin.on("closed", () => { foregroundNoticeWin = null; });
 }
 
+let foregroundNoticeTimer = null;
 function setForegroundNotice(active) {
+  if (foregroundNoticeTimer) clearTimeout(foregroundNoticeTimer);
+  foregroundNoticeTimer = null;
   if (!foregroundNoticeWin || foregroundNoticeWin.isDestroyed()) return;
   if (active) {
+    foregroundNoticeTimer = setTimeout(() => setForegroundNotice(false), 3000);
     positionForegroundNotice();
     foregroundNoticeWin.setAlwaysOnTop(true, "screen-saver");
     foregroundNoticeWin.showInactive();

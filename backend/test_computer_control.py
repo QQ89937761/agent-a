@@ -168,7 +168,7 @@ class WindowHelpersTests(unittest.TestCase):
                 result = computer_module._uia_select_named_control(88, "target")
             self.assertEqual(expected, result["uia_tree_unusable"])
 
-    def test_restore_precedes_uia_focus_and_activation_error_requires_real_foreground(self):
+    def test_restore_uses_native_focus_and_activation_error_requires_real_foreground(self):
         window = FakeWindow("Test", 301)
         window.isMinimized = True
         auto = types.ModuleType("uiautomation")
@@ -182,7 +182,7 @@ class WindowHelpersTests(unittest.TestCase):
         window.activate = activate
         with patch.dict(sys.modules, {"win32gui": gui, "uiautomation": auto}):
             self.assertTrue(system_control.focus_window_object(window)["focused"])
-            self.assertEqual(["restore", "uia_focus", "activate"], window.calls)
+            self.assertEqual(["restore", "activate"], window.calls)
             gui.GetForegroundWindow = lambda: 999
             with self.assertRaises(RuntimeError):
                 system_control.focus_window_object(window)
@@ -553,6 +553,34 @@ class ControlLockTests(unittest.IsolatedAsyncioTestCase):
             else:
                 cleanup = await system_control.acquire_control(1.0)
                 if cleanup is not None:
+                    system_control.release_control(cleanup)
+
+    async def test_timed_out_worker_hides_notice_but_keeps_input_mutex_until_exit(self):
+        started = threading.Event()
+        finish = threading.Event()
+        notices = []
+        context = system_control.set_foreground_notice_callback(notices.append)
+        owner = await system_control.acquire_control(0.2)
+        def blocked():
+            started.set()
+            finish.wait(2)
+        try:
+            with self.assertRaisesRegex(TimeoutError, "desktop_call_timeout"):
+                await system_control.run_controlled(owner, blocked, timeout=0.05)
+            self.assertTrue(started.is_set())
+            self.assertFalse(system_control.foreground_control_active())
+            self.assertEqual([True, False], notices)
+            self.assertIsNone(await system_control.acquire_control(0.05))
+            finish.set()
+            replacement = await system_control.acquire_control(1)
+            self.assertIsNotNone(replacement)
+            system_control.release_control(replacement)
+        finally:
+            finish.set()
+            system_control.reset_foreground_notice_callback(context)
+            if system_control._CONTROL_LOCK.locked():
+                cleanup = await system_control.acquire_control(1)
+                if cleanup:
                     system_control.release_control(cleanup)
 
     async def test_cancelled_type_text_keeps_control_until_input_thread_finishes(self):

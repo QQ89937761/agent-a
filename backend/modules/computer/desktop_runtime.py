@@ -156,6 +156,9 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
                 system_control.activate_foreground(control)
                 try:
                     await system_control.run_controlled(control, system_control.focus_window_object, target)
+                except TimeoutError as exc:
+                    status = "desktop_call_timeout" if "desktop_call_timeout" in str(exc) else "input_target_not_focused"
+                    return activation_failure(status, error=str(exc)[:300])
                 except Exception as exc:
                     return activation_failure("input_target_not_focused", error=str(exc)[:300])
                 # A successful activation call alone does not prove foreground ownership.

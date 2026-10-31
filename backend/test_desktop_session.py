@@ -139,7 +139,7 @@ class DesktopSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(await control.acquire_control(.1))
         self.assertEqual([True, False, True], self.notices)
 
-    async def test_escape_during_input_keeps_notice_until_input_has_stopped(self):
+    async def test_escape_during_input_hides_notice_but_keeps_mutex_until_input_stops(self):
         owner = await control.acquire_control(.1)
         started = threading.Event()
         finish = threading.Event()
@@ -151,8 +151,9 @@ class DesktopSessionTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertTrue(await asyncio.to_thread(started.wait, 1))
             control._escape_foreground()
-            self.assertEqual([True], self.notices)
-            self.assertTrue(control.foreground_control_active())
+            self.assertEqual([True, False], self.notices)
+            self.assertFalse(control.foreground_control_active())
+            self.assertTrue(control._CONTROL_LOCK.locked())
             finish.set()
             with self.assertRaisesRegex(RuntimeError, "控制权已交还"):
                 await running
