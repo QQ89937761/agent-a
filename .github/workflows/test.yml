@@ -25,7 +25,7 @@ jobs:
           pip install tomli httpx fastapi uvicorn pydantic websockets python-docx openpyxl pillow 'qrcode[pil]>=8.0,<9.0' paramiko tzdata pyflakes soundfile==0.13.1 pypdf==6.19.0 pymupdf==1.28.2
 
       # strict 模式禁止因缺依赖跳过整个测试模块;语法错/内部导入拼错同样非 0 退出。
-      # Linux 上预期恰好 10 个 skipped(原 9 项 Windows 专属回归，加 1 项 Windows shell 输出句柄继承回归)。
+      # Linux 上预期恰好 12 个 skipped(原 10 项 Windows 专属回归，加 2 项桌面动作子进程入口回归)。
       - name: 后端测试
         timeout-minutes: 10
         run: |
@@ -40,8 +40,8 @@ jobs:
           skipped=$(grep -oE 'skipped=[0-9]+' test-output.txt | tail -1 | cut -d= -f2)
           skipped=${skipped:-0}
           echo "skipped=$skipped"
-          if [ "$skipped" -ne 10 ]; then
-            echo "::error::Linux 平台应恰好跳过 10 项,实际为 $skipped。如果确实新增了平台专属测试,请同时更新此处的期望值。"
+          if [ "$skipped" -ne 12 ]; then
+            echo "::error::Linux 平台应恰好跳过 12 项,实际为 $skipped。如果确实新增了平台专属测试,请同时更新此处的期望值。"
             exit 1
           fi
 

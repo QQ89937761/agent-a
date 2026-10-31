@@ -270,8 +270,9 @@ class WindowHelpersTests(unittest.TestCase):
         self.assertEqual(computer_module.validate_region(-100, 0, 200, 100, bounds), (-100, 0, 200, 100))
         with self.assertRaises(ValueError):
             computer_module.validate_point(100, 1, bounds)
+        self.assertEqual(computer_module.validate_region(0, 0, 101, 100, bounds), (0, 0, 100, 100))
         with self.assertRaises(ValueError):
-            computer_module.validate_region(0, 0, 101, 100, bounds)
+            computer_module.validate_region(100, 0, 1, 1, bounds)
 
         white = Image.new("RGB", (20, 20), "white")
         changed = white.copy()
@@ -425,6 +426,12 @@ class WindowHelpersTests(unittest.TestCase):
             result = computer_module._uia_select_named_control(88, "6S")
         self.assertFalse(result["ok"])
         self.assertEqual("uia_target_ambiguous", result["status"])
+
+    def test_conversation_selection_does_not_match_shorter_name_in_target(self):
+        controls = [SimpleNamespace(Name="Alice", ControlTypeName="ListItemControl", IsOffscreen=False)]
+        with patch.object(computer_module, "_uia_controls", return_value=controls):
+            result = computer_module._uia_select_named_control(88, "Alice Smith")
+        self.assertEqual("uia_target_not_found", result["status"])
 
     def test_uia_control_info_is_bounded_and_serializable(self):
         control = SimpleNamespace(
@@ -909,11 +916,23 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         finally:
             screenshot_path.unlink(missing_ok=True)
 
-        with self.assertRaisesRegex(ValueError, "超出"):
+        with self.assertRaisesRegex(ValueError, "没有交集"):
             await self.registry.call("screen_capture_region", {
-                "x": 90, "y": 90, "width": 20, "height": 20,
+                "x": 100, "y": 100, "width": 20, "height": 20,
             })
         self.assertEqual(1, grab.call_count)
+
+    async def test_clipped_screenshot_reports_actual_origin_for_pointer_mapping(self):
+        with patch.object(ImageGrab, "grab", return_value=Image.new("RGB", (10, 10), "white")) as grab:
+            result = await self.registry.call("screen_capture_region", {"x": -5, "y": -8, "width": 15, "height": 18})
+        try:
+            self.assertTrue(result["clipped"])
+            self.assertEqual({"x": -5, "y": -8, "width": 15, "height": 18}, result["requested_region"])
+            self.assertEqual({"x": 0, "y": 0, "width": 10, "height": 10}, result["region"])
+            self.assertEqual({"x": 0, "y": 0}, result["coordinate_mapping"]["origin"])
+            grab.assert_called_once_with(bbox=(0, 0, 10, 10), all_screens=True)
+        finally:
+            Path(result["path"]).unlink(missing_ok=True)
 
     async def test_pointer_and_hotkey_use_controlled_input_and_stop_when_user_active(self):
         moved = await self.registry.call("move_pointer", {"x": 30, "y": 40, "duration": 9})
@@ -1635,7 +1654,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                 "window": "Codex", "destination": "项目会话", "text": "继续任务",
             })
         self.assertEqual("destination_not_confirmed", result["status"])
-        self.assertEqual(2, confirm.await_count)  # Current chat, then one check of the unchanged selected view.
+        self.assertEqual(1, confirm.await_count)  # The selected view has the same pixels: no new evidence.
         self.assertEqual("foreground_exclusive", result["control_mode"])
         background.assert_not_called()
         self.assertEqual([], self.clipboard)
@@ -1657,7 +1676,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
                         "window": title, "destination": "Exact recipient", "text": "hello",
                     })
                 self.assertEqual("destination_not_confirmed", result["status"])
-                self.assertEqual(2, confirm.await_count, "one initial check and one after selection; unchanged retries must not query vision")
+                self.assertEqual(1, confirm.await_count, "identical negative evidence within one send must not query vision again")
                 self.assertFalse(result["sent"])
                 self.assertTrue(result["requires_reinspect"])
                 self.assertTrue(result["_observation_image"])
@@ -1689,6 +1708,33 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["hello"], self.clipboard)
         self.assertEqual(1, sum(action[0] == "press" for action in self.pg.actions))
         self.assertTrue(result["coordinate_mapping"])
+
+    async def test_task_send_protection_survives_ttl_key_and_raw_input(self):
+        window = FakeWindow("Generic messenger", 398)
+        context = system_control.set_foreground_notice_callback(None, on_escape=lambda: None)
+        try:
+            with patch.dict(sys.modules, {"pygetwindow": fake_window_module([window])}), \
+                 patch.object(computer_module, "_uia_select_named_control", return_value={"ok": True}) as selected, \
+                 patch.object(computer_module, "_uia_background_send", return_value={"available": True, "verified": False}), \
+                 patch.object(computer_module, "_text_input_window", return_value=window):
+                args = {"window": window.title, "destination": "Exact recipient", "text": "hello"}
+                first = await self.registry.call("send_text_to_window", args)
+                records = computer_module._send_records()
+                for key, (_at, state) in list(records.items()):
+                    records[key] = (0, state)
+                retry = await self.registry.call("send_text_to_window", {**args, "idempotency_key": "changed", "submit_key": "none"})
+                raw = await self.registry.call("type_text", {"handle": 398, "text": "hello"})
+                enter = await self.registry.call("press_hotkey", {"handle": 398, "keys": ["enter"]})
+                button = await self.registry.call("click_element", {"handle": 398, "target_desc": "Send message"})
+            self.assertEqual("sent_unverified", first["status"])
+            self.assertEqual("previous_send_unconfirmed", retry["status"])
+            self.assertEqual("previous_send_unconfirmed", raw["status"])
+            self.assertEqual("previous_send_unconfirmed", enter["status"])
+            self.assertEqual("previous_send_unconfirmed", button["status"])
+            self.assertEqual(1, selected.call_count)
+        finally:
+            system_control.reset_foreground_notice_callback(context)
+        self.assertEqual({}, computer_module._send_records())
 
     async def test_observation_disk_failure_does_not_turn_verified_send_into_retry(self):
         window = FakeWindow("Generic messenger", 299)
@@ -1739,7 +1785,7 @@ class ComputerToolsTests(unittest.IsolatedAsyncioTestCase):
              patch.object(computer_module, "confirm_destination_in_image", new=AsyncMock(side_effect=[False, False, True])) as confirm, \
              patch.object(computer_module.asyncio, "sleep", new=AsyncMock()), \
              patch.object(system_control, "focus_window_object", return_value={"window": system_control.window_info(window)}), \
-             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'gray', 'black', 'black']]), \
+             patch.object(ImageGrab, "grab", side_effect=[Image.new("RGB", (100, 80), color) for color in ['white', 'gray', 'gray', 'black', 'gray', 'black']]), \
              patch.object(computer_module, "_uia_background_send", return_value={"available": True, "verified": True}) as background:
             result = await self.registry.call("send_text_to_window", {"window": "微信", "destination": "测试联系人", "text": "测试"})
         self.assertTrue(result["ok"])

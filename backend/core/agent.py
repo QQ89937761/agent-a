@@ -926,6 +926,7 @@ SYSTEM_PROMPT = """你是“小A”，一个运行在用户电脑上的 AI 办�
 遇到失败时的替代方案：
 - 结构化页面或 UIA 信息不足时，可改用截图、区域观察或工具支持的视觉兜底；目标身份不明确时先澄清，不把失败当成换工具绕过保护的理由。
 - 专用工具不可用时，自主选择可用工具、命令或组合方案，仍检查目标、权限和结果。失败说明真实原因与可行下一步，不把推荐流程说成能力禁令。
+- 收到 sent_unverified、background_partial 或 previous_send_unconfirmed 后，同一任务的相同消息只做只读核验；不换发送方式、幂等键、草稿模式或裸 type_text/回车重发。等待界面使用 wait_for_screen_change，不连续多轮截图。
 - wait_for_screen_change 只检测调用后的变化，不能证明前一步没成功；快速操作可能在开始等待前已完成。先按当前画面核对；no_change 后改变定位方式或核对目标，不连续原样重等。
 - 按风险与任务需要验证关键节点，避免每次点击都截屏，也不为节省步骤牺牲结果验证。
 
@@ -1160,7 +1161,7 @@ class Agent:
             if isinstance(payload, dict):
                 status = str(payload.get("status") or "").strip()
                 if status in {
-                    "no_change", "message_action_requires_send_tool",
+                    "no_change", "message_action_requires_send_tool", "previous_send_unconfirmed",
                     "input_target_missing", "input_target_not_focused",
                 }:
                     loop_signature = (signature[0], f"status:{status}")
@@ -1791,7 +1792,7 @@ class Agent:
                     not read_only_operation and tool and tool.side_effect and result_progress and not obs_image_b64
                 )
                 # Screenshot file names change on every save; they are not screen progress.
-                outcome = self._stringify({key: value for key, value in metadata.items() if key != "path"}) if obs_image_b64 else result_str
+                outcome = self._stringify({key: value for key, value in metadata.items() if key not in {"path", "observation_id", "timings", "timing_ms", "elapsed_ms"}}) if obs_image_b64 else result_str
                 remember_outcome(signature, outcome, obs_image_b64, observed=observed)
                 context_result = result_str
                 if not terminal_error and not reads_result_ref:

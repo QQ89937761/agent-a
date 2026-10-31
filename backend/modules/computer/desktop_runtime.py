@@ -347,6 +347,9 @@ def register_tools(registry, *, resolve, inventory, inspect, capture, foreground
                         if (not matching_controls([actual], item["expect"]) or
                                 bool(control.IsPassword) or not bool(control.IsEnabled)):
                             raise RuntimeError("desktop_plan_input_focus_changed")
+            verify_input_window.descriptor = {"window": info, "selected": {
+                key: selected.get(key, "") for key in ("name", "control_type", "automation_id")},
+                "tool": name, "expect": item["expect"]}
             input_token = system_control.INPUT_PRECONDITION.set(verify_input_window)
             try:
                 tool = registry.get(name)

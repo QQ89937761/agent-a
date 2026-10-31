@@ -133,6 +133,17 @@ class RuntimeContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(m.get("content"), list) and "用户上传的附件" in str(m["content"]) for m in latest))
         self.assertEqual(2, sum(isinstance(m.get("content"), list) for m in latest))
 
+    async def test_same_pixels_with_fresh_paths_tokens_and_timings_still_stop(self):
+        count = 0
+        async def capture():
+            nonlocal count
+            count += 1
+            return {"ok": True, "path": f"screen-{count}.jpg", "observation_id": str(count),
+                    "timings": {"capture_ms": count}, "_observation_image": "c2FtZQ=="}
+        events, _ = await self.run_calls([("desktop_observe", {})] * 15, capture, name="desktop_observe")
+        self.assertEqual(6, count)
+        self.assertEqual("spinning", next(e.data["reason"] for e in events if e.type == "truncated"))
+
     async def test_stalled_results_allow_replanning_before_stop(self):
         async def inspect():
             return "unchanged"

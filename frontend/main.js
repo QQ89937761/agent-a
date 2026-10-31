@@ -168,21 +168,30 @@ function chatBackgroundMenu() {
 }
 
 function positionForegroundNotice() {
-  if (!foregroundNoticeWin || foregroundNoticeWin.isDestroyed()) return;
-  const cursor = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursor);
-  const bounds = display.workArea;
-  const [width] = foregroundNoticeWin.getSize();
-  foregroundNoticeWin.setPosition(
-    Math.round(bounds.x + (bounds.width - width) / 2),
-    Math.round(bounds.y + bounds.height - foregroundNoticeWin.getBounds().height - 14),
-  );
+  if (!foregroundNoticeWin || foregroundNoticeWin.isDestroyed() || !foregroundNoticeActive) return;
+  const displays = screen.getAllDisplays();
+  const display = displays.find(item => item.id === foregroundNoticeDisplayId) || screen.getPrimaryDisplay();
+  foregroundNoticeDisplayId = display.id;
+  const area = display.workArea;
+  const width = Math.min(560, Math.max(1, area.width - 16));
+  const height = Math.min(100, area.height);
+  const next = {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + Math.min(8, Math.max(0, area.height - height))),
+    width, height,
+  };
+  const current = foregroundNoticeWin.getBounds();
+  if (Object.keys(next).some(key => current[key] !== next[key])) {
+    foregroundNoticeWin.setBounds(next, false);
+  }
 }
 
+let foregroundNoticeDisplayId = null;
+let foregroundNoticeActive = false;
 function createForegroundNotice() {
   foregroundNoticeWin = new BrowserWindow({
-    width: 520,
-    height: 72,
+    width: 560,
+    height: 100,
     frame: false,
     transparent: true,
     resizable: false,
@@ -203,7 +212,13 @@ function createForegroundNotice() {
   keepOutOfTaskbar(foregroundNoticeWin);
   lockNavigation(foregroundNoticeWin, [path.join(__dirname, "src", "foreground_notice.html")]);
   foregroundNoticeWin.loadFile(path.join(__dirname, "src", "foreground_notice.html"));
-  foregroundNoticeWin.on("closed", () => { foregroundNoticeWin = null; });
+  foregroundNoticeWin.on("closed", () => {
+    foregroundNoticeWin = null;
+    foregroundNoticeActive = false;
+    foregroundNoticeDisplayId = null;
+    if (foregroundNoticeTimer) clearTimeout(foregroundNoticeTimer);
+    foregroundNoticeTimer = null;
+  });
 }
 
 let foregroundNoticeTimer = null;
@@ -213,10 +228,15 @@ function setForegroundNotice(active) {
   if (!foregroundNoticeWin || foregroundNoticeWin.isDestroyed()) return;
   if (active) {
     foregroundNoticeTimer = setTimeout(() => setForegroundNotice(false), 3000);
+    if (foregroundNoticeActive) return; // Heartbeats renew the lease without moving or re-showing the overlay.
+    foregroundNoticeActive = true;
+    foregroundNoticeDisplayId = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id;
     positionForegroundNotice();
     foregroundNoticeWin.setAlwaysOnTop(true, "screen-saver");
     foregroundNoticeWin.showInactive();
   } else {
+    foregroundNoticeActive = false;
+    foregroundNoticeDisplayId = null;
     foregroundNoticeWin.hide();
   }
 }

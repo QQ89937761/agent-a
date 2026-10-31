@@ -20,6 +20,8 @@ class FakeWindow extends EventEmitter {
     this.destroyed = false;
     this.skipTaskbar = options.skipTaskbar;
     this.webContents = new EventEmitter();
+    this.boundsUpdates = 0;
+    this.shows = 0;
   }
   isDestroyed() { return this.destroyed; }
   isVisible() { return this.visible; }
@@ -34,22 +36,27 @@ class FakeWindow extends EventEmitter {
   setIgnoreMouseEvents(value, options) { this.ignoreMouse = value; this.forwardMouse = options.forward; }
   getSize() { return [this.options.width, this.options.height]; }
   setPosition(x, y) { this.position = [x, y]; }
+  setBounds(bounds) { this.boundsUpdates++; this.position = [bounds.x, bounds.y]; this.options.width = bounds.width; this.options.height = bounds.height; }
   hide() { this.visible = false; }
   close() { this.destroyed = true; this.emit("closed"); }
   setShape() {}
   loadFile() {}
-  showInactive() { this.visible = true; this.emit("show"); }
+  showInactive() { this.shows++; this.visible = true; this.emit("show"); }
   show() { this.visible = true; this.skipTaskbar = false; this.emit("show"); }
 }
 const shape = require("./float_position");
 const ipcMain = new EventEmitter();
 let positionSaves = 0;
+const primaryDisplay = {id: 1, workArea: {x: 0, y: 0, width: 1920, height: 1080}, workAreaSize: {width: 1920, height: 1080}};
+let secondaryDisplay = {id: 2, workArea: {x: -1280, y: 60, width: 1280, height: 900}};
+let displays = [primaryDisplay, secondaryDisplay];
 const context = vm.createContext({
   BrowserWindow: FakeWindow, ...shape, path, __dirname, console, ipcMain,
   screen: {
     getCursorScreenPoint: () => ({x: 0, y: 0}),
-    getDisplayNearestPoint: () => ({workArea: {x: 0, y: 0, width: 1920, height: 1080}}),
-    getPrimaryDisplay: () => ({workAreaSize: {width: 1920, height: 1080}}),
+    getDisplayNearestPoint: () => primaryDisplay,
+    getPrimaryDisplay: () => primaryDisplay,
+    getAllDisplays: () => displays,
   },
   loadFloatPosition: () => null, lockNavigation() {}, updateChatBackground() {},
   saveFloatPosition() { positionSaves++; }, clearFloatAlert() {}, updateChatShape() {}, app: {quit() {}},
@@ -80,23 +87,48 @@ assert.equal(notice.forwardMouse, true);
 context.setForegroundNotice(true);
 assert.equal(notice.visible, true);
 assert.equal(typeof context.noticeTimeout, "function", "active notice must arm its recovery watchdog");
-assert.deepEqual(notice.position, [700, 994], "notice stays above the taskbar at bottom center");
-context.screen.getDisplayNearestPoint = () => ({workArea: {x: -1280, y: 60, width: 1280, height: 900}});
+assert.deepEqual(notice.position, [680, 8], "notice is at top center of the active screen");
+const firstBoundsUpdates = notice.boundsUpdates;
+const firstShows = notice.shows;
+context.screen.getDisplayNearestPoint = () => secondaryDisplay;
+for (let heartbeat = 0; heartbeat < 60; heartbeat++) context.setForegroundNotice(true);
+assert.deepEqual(notice.position, [680, 8], "mouse movement to another screen must not move this lease's notice");
+assert.equal(notice.boundsUpdates, firstBoundsUpdates, "heartbeats never reposition the notice");
+assert.equal(notice.shows, firstShows, "heartbeats never re-show an already visible native window");
 context.positionForegroundNotice();
-assert.deepEqual(notice.position, [-900, 874], "secondary display taskbar coordinates");
-context.setForegroundNotice(true);
-assert.equal(notice.visible, true, "repeated active notifications keep desktop notice visible");
+assert.equal(notice.boundsUpdates, firstBoundsUpdates, "unchanged display metrics do not invoke native positioning");
 context.setForegroundNotice(false);
 assert.equal(notice.visible, false, "release hides the notice immediately");
 context.setForegroundNotice(true);
+assert.deepEqual(notice.position, [-920, 68], "a new lease can start on a secondary display with negative coordinates");
+secondaryDisplay.workArea = {x: -1280, y: 100, width: 1280, height: 860};
+context.positionForegroundNotice();
+assert.deepEqual(notice.position, [-920, 108], "real taskbar/display changes update the pinned display");
+displays = [primaryDisplay];
+context.positionForegroundNotice();
+assert.deepEqual(notice.position, [680, 8], "unplugged display falls back to primary instead of following the mouse");
+context.setForegroundNotice(false);
+secondaryDisplay = {id: 2, workArea: {x: -400, y: -600, width: 400, height: 600}};
+displays = [primaryDisplay, secondaryDisplay];
+context.setForegroundNotice(true);
+assert.deepEqual(notice.getBounds(), {x: -392, y: -592, width: 384, height: 100}, "narrow displays keep halo and text window within the work area");
 context.noticeTimeout();
 assert.equal(notice.visible, false, "lost heartbeats must hide the notice");
+context.screen.getDisplayNearestPoint = () => primaryDisplay;
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
 assert(packageJson.build.files.includes("src/foreground_notice.html"), "notice must ship in ASAR");
+const noticeHtml = fs.readFileSync(path.join(__dirname, "src/foreground_notice.html"), "utf8");
+assert(noticeHtml.includes("--brand: #2563eb"), "takeover uses the existing blue brand color");
+assert(noticeHtml.includes("background: var(--brand)"), "takeover pill has a blue surface");
+assert(noticeHtml.includes("prefers-reduced-motion: reduce"), "halo has a static accessibility fallback");
+const haloFrames = noticeHtml.match(/@keyframes halo-breathe\s*\{([\s\S]*?)\n/)[1];
+assert(!/transform|top|bottom|left|right|width|height/.test(haloFrames), "halo only changes opacity, never position or layout");
 const html = fs.readFileSync(path.join(__dirname, "src/index.html"), "utf8");
 assert(html.indexOf('if (ev.type === "foreground_control")') < html.indexOf('const eventConversationId ='), "notice is machine-wide, including inactive chats");
 assert(main.includes('webContents.on("render-process-gone", () => setForegroundNotice(false))'));
 assert(main.includes('foregroundNoticeWin.close()'));
+// Keep the floating-icon fixture independent of the notice display tests.
+context.screen.getDisplayNearestPoint = () => ({workArea: {x: -1280, y: 60, width: 1280, height: 900}});
 context.createFloat();
 const float = context.floatWin;
 assert.equal(float.options.y, 80, "floating icon should start above the chat panel");
@@ -115,7 +147,7 @@ assert.equal(chat.options.y, 100, "chat panel should start above the old baselin
 chat.emit("ready-to-show");
 assert.equal(chat.visible, false, "do not open the chat panel on startup");
 // Reproduce a saved floating position overlapping the panel's top edge.
-context.screen.getDisplayNearestPoint = () => ({workArea: {x: 0, y: 0, width: 1920, height: 1080}});
+context.screen.getDisplayNearestPoint = () => primaryDisplay;
 float.setPosition(1700, 153);
 chat.show();
 assert.deepEqual(float.getPosition(), [1700, 153], "opening chat must preserve an overlapping icon position");
@@ -139,6 +171,11 @@ assert.equal(chat.skipTaskbar, true, "opening chat must not recreate a taskbar b
 context.setForegroundNotice(true);
 chat.webContents.emit("render-process-gone");
 assert.equal(notice.visible, false, "renderer crash must not leave an orphan notice");
+context.setForegroundNotice(true);
+notice.close();
+assert.equal(context.noticeTimeout, null, "closing the notice clears its recovery timer");
+context.setForegroundNotice(true);
+assert.equal(context.noticeTimeout, null, "closed notice cannot be resurrected by a stale heartbeat");
 context.createFloat();
 context.quitting = true;
 context.floatWin.emit("ready-to-show");

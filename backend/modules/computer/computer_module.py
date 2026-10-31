@@ -80,9 +80,11 @@ def validate_region(
     if width <= 0 or height <= 0 or width > 4096 or height > 4096 or width * height > 16_000_000:
         raise ValueError("截图区域尺寸必须为正，且不超过 4096x4096 / 1600 万像素")
     left, top, right, bottom = bounds
-    if x < left or y < top or x + width > right or y + height > bottom:
-        raise ValueError("截图区域超出虚拟桌面边界")
-    return x, y, width, height
+    clipped_left, clipped_top = max(x, left), max(y, top)
+    clipped_right, clipped_bottom = min(x + width, right), min(y + height, bottom)
+    if clipped_left >= clipped_right or clipped_top >= clipped_bottom:
+        raise ValueError("截图区域与虚拟桌面没有交集")
+    return clipped_left, clipped_top, clipped_right - clipped_left, clipped_bottom - clipped_top
 
 
 def image_change_ratio(before: Any, after: Any, *, pixel_threshold: int = 12) -> float:
@@ -102,27 +104,34 @@ def image_change_ratio(before: Any, after: Any, *, pixel_threshold: int = 12) ->
     return round(histogram[255] / max(1, mask.width * mask.height), 6)
 
 
+def _send_records():
+    session = system_control._CONTROL_SESSION.get()
+    return session.sends if session is not None else _RECENT_SENDS
+
+
 def reserve_send(key: str, *, ttl: float = 30.0, now: float | None = None) -> bool:
-    """短期幂等：同一发送指纹在 TTL 内只允许一次。"""
+    """当前任务内保留输入结果；无任务上下文时使用短期幂等。"""
     current = time.monotonic() if now is None else float(now)
-    expired = [item for item, (at, _state) in _RECENT_SENDS.items() if current - at >= ttl]
+    records = _send_records()
+    expired = [item for item, (at, _state) in records.items()
+               if current - at >= ttl and system_control._CONTROL_SESSION.get() is None]
     for item in expired:
-        _RECENT_SENDS.pop(item, None)
-    if key in _RECENT_SENDS:
+        records.pop(item, None)
+    if key in records:
         return False
-    _RECENT_SENDS[key] = (current, "pending")
+    records[key] = (current, "pending")
     return True
 
 
 def _send_state(key: str) -> str:
-    item = _RECENT_SENDS.get(key)
+    item = _send_records().get(key)
     return item[1] if item is not None else ""
 
 
 def _mark_send(key: str, state: str) -> None:
-    item = _RECENT_SENDS.get(key)
+    item = _send_records().get(key)
     if item is not None:
-        _RECENT_SENDS[key] = (item[0], state)
+        _send_records()[key] = (time.monotonic(), state)
 
 
 async def wait_for_change(
@@ -644,8 +653,6 @@ def _uia_select_named_control(
         if label == target:
             matches.append((control, name, type_name))
         elif len(target) >= 2 and target in label:
-            matches.append((control, name, type_name))
-        elif len(label) >= 2 and label in target:
             matches.append((control, name, type_name))
 
     if tree_unusable:
@@ -1205,12 +1212,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
     async def _verify_destination(
         region: tuple[int, int, int, int], destination: str, *,
         sent_text: str | None = None, timeout: float = 5.0, attempts: int = 3,
-        input_desc: str = "",
+        input_desc: str = "", negative_checks: set | None = None,
     ) -> tuple[bool, dict[str, Any], dict[str, str]]:
         # Only re-observe: never submit or paste again while waiting for the UI.
         deadline = time.monotonic() + timeout
         observation = None
-        checked_images: set[tuple] = set()
+        checked_images = negative_checks if negative_checks is not None else set()
         confirmed = False
         diagnostics: dict[str, str] = {}
         input_target: dict[str, Any] = {}
@@ -1231,11 +1238,10 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             # new evidence. Only reuse negative checks within this verification phase;
             # never reuse a successful confirmation for later input or another target.
             client = get_llm()
-            key = (id(client), getattr(getattr(client, "cfg", None), "chat_model", None),
+            key = (destination, sent_text, input_desc, id(client), getattr(getattr(client, "cfg", None), "chat_model", None),
                    hashlib.sha256(observation).digest())
             if key in checked_images:
                 continue
-            checked_images.add(key)
             # UI settling budget excludes vision latency; a slow gateway must
             # not consume the chance to capture the later outgoing bubble.
             started = time.monotonic()
@@ -1249,6 +1255,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 break
             if diagnostics:
                 break  # Gateway/config errors already have their own retry policy.
+            checked_images.add(key)
         payload = {}
         if observation:
             payload = {
@@ -1314,6 +1321,8 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         image = await _capture(region)
         result = await asyncio.to_thread(screenshot_result, image, f"已截取区域 ({region[0]},{region[1]})", detail)
         result["region"] = {"x": region[0], "y": region[1], "width": image.width, "height": image.height}
+        result["requested_region"] = {"x": x, "y": y, "width": width, "height": height}
+        result["clipped"] = region != (x, y, width, height)
         return remember_screenshot(result, image, region[0], region[1])
 
     @registry.tool(
@@ -1424,6 +1433,11 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 return {"ok": False, "status": "window_not_found", "error": f"没找到窗口：{window or handle}"}
             target_handle = int(getattr(target_window, "_hWnd", 0) or 0)
 
+        session = system_control._CONTROL_SESSION.get()
+        if session is not None and _looks_like_message_action(target_desc) and any(
+                h == target_handle for h, _body in session.message_inputs):
+            return {"ok": False, "status": "previous_send_unconfirmed", "retryable": False,
+                    "error": "此窗口已执行消息输入；不能换用发送按钮重新提交，请只读核验。"}
         codex_target = _is_codex_window_title(
             getattr(target_window, "title", "") if target_window is not None else _foreground_window_title()
         ) or window.strip().casefold() in {"codex", "chatgpt"}
@@ -1723,6 +1737,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         target = _text_input_window(handle) if handle else None
         if handle and target is None:
             return {"ok": False, "status": "input_target_missing", "error": "输入目标窗口已关闭或不可用；未输入文字，请重新核对目标。"}
+        session = system_control._CONTROL_SESSION.get()
+        input_handle = int(target._hWnd) if target is not None else _foreground_window_handle()
+        if session is not None and any(h == input_handle and body.strip() == text.strip()
+                                       for h, body in session.message_inputs):
+            return {"ok": False, "status": "previous_send_unconfirmed", "retryable": False,
+                    "error": "当前任务已向此窗口输入相同消息；请只读核验，不要再次输入或提交。"}
         target_title = str(target.title) if target is not None else _foreground_window_title()
         if _is_message_routing_window_title(target_title) and not is_document_text_input({"handle": handle}):
             return {
@@ -1828,7 +1848,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 "allow_visual_fallback": {"type": "boolean", "description": "是否允许视觉兜底，默认是；目标未确认时不输入或发送"},
                 "verify_timeout": {"type": "number", "minimum": 0.5, "maximum": 15},
                 "dedupe_seconds": {"type": "number", "minimum": 5, "maximum": 300},
-                "idempotency_key": {"type": "string", "description": "调用方提供的幂等键，可选"},
+                "idempotency_key": {"type": "string", "description": "兼容调用方幂等键；改变键不能绕过同一任务的相同消息保护"},
             },
             "required": ["window", "text", "destination"],
         },
@@ -1878,8 +1898,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
         selection_mode = "uia"
 
         # Same message stays the same across buttons, keyboard and tool aliases.
-        mode = "draft" if submit_key == "none" else "send"
-        fingerprint_source = f"{target_handle}\0{destination.strip()}\0{mode}\0{idempotency_key.strip() or text}"
+        fingerprint_source = f"{target_handle}\0{destination.strip().casefold()}\0{text}"
         fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
         dedupe_seconds = max(5.0, min(float(dedupe_seconds), 300.0))
         control = await system_control.acquire_control(8.0, foreground=False)
@@ -1890,12 +1909,15 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             }
         reserved = False
         action_started = False
+        negative_checks: set = set()
+        session = system_control._CONTROL_SESSION.get()
         try:
             if not reserve_send(fingerprint, ttl=dedupe_seconds):
                 if _send_state(fingerprint) != "sent":
                     return {
                         "ok": False,
                         "status": "previous_send_unconfirmed",
+                        "retryable": False, "next_action": "read_only_verification",
                         "control_mode": "background",
                         "sent": None,
                         "verified": False,
@@ -1935,7 +1957,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                     input_window = window_identity(target)
                     # Detached/current chats may have no selectable contact item at all.
                     confirmed, observation, diagnostics = await _verify_destination(
-                        region, destination, attempts=1, input_desc=input_desc,
+                        region, destination, attempts=1, input_desc=input_desc, negative_checks=negative_checks,
                     )
                     selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics,
                                 "uia_tree_unusable": uia_tree_unusable}
@@ -1956,12 +1978,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                             )
                             input_window = window_identity(target)
                             confirmed, observation, diagnostics = await _verify_destination(
-                                region, destination, timeout=verify_timeout, input_desc=input_desc,
+                                region, destination, timeout=verify_timeout, input_desc=input_desc, negative_checks=negative_checks,
                             )
                             selected = {"ok": confirmed, "status": "destination_not_confirmed", **observation, **diagnostics,
                                         "uia_tree_unusable": uia_tree_unusable}
                 if not selected.get("ok"):
-                    _RECENT_SENDS.pop(fingerprint, None)
+                    _send_records().pop(fingerprint, None)
                     return {
                         "ok": False,
                         "status": selected.get("status", "destination_not_confirmed"),
@@ -1980,6 +2002,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                         "error": selected.get("error", "未确认目标会话，未输入或发送。"),
                     }
 
+            action_started = not uia_tree_unusable  # Cancellation may occur after native input.
             background = ({"available": False, "reason": "UIA 目标树不可用，本次调用已直接转受控视觉路径"}
                           if uia_tree_unusable else
                           await system_control.run_controlled(control, _uia_background_send,
@@ -2014,8 +2037,9 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                     "background_reason": background.get("reason", "UIA 后台操作异常"),
                 }
 
+            action_started = False  # UIA returned explicitly without input.
             if not allow_visual_fallback:
-                _RECENT_SENDS.pop(fingerprint, None)
+                _send_records().pop(fingerprint, None)
                 return {
                     "ok": False,
                     "status": "input_not_confirmed",
@@ -2032,7 +2056,7 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 }
 
             if not await system_control.wait_for_user_idle(1.5, 8.0):
-                _RECENT_SENDS.pop(fingerprint, None)  # 尚未操作，可稍后安全重试。
+                _send_records().pop(fingerprint, None)  # 尚未操作，可稍后安全重试。
                 return {
                     "ok": False, "status": "user_active", "control_mode": "needs_foreground",
                     "error": "后台控制不可用，且检测到你正在使用鼠标或键盘；等待后已取消前台抢占",
@@ -2143,11 +2167,13 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
                 "note": "已从目标会话画面确认已发出正文" if verified else "已执行提交，但画面未能证明发送成功；请检查截图，不自动重复发送",
             }
         finally:
+            if action_started and session is not None:
+                session.message_inputs.add((target_handle, text))
             if reserved and _send_state(fingerprint) == "pending":
                 if action_started:
                     _mark_send(fingerprint, "unconfirmed")
                 else:
-                    _RECENT_SENDS.pop(fingerprint, None)
+                    _send_records().pop(fingerprint, None)
             system_control.release_control(control)
 
     @registry.tool(
@@ -2198,6 +2224,12 @@ def register_tools(registry: ToolRegistry, llm: LLMClient | Callable[[], LLMClie
             if target is None:
                 return {"ok": False, "status": "input_target_missing", "error": "目标窗口已关闭或不可用；未发送按键。"}
             handle = int(target._hWnd)
+        session = system_control._CONTROL_SESSION.get()
+        input_handle = int(target._hWnd) if target is not None else _foreground_window_handle()
+        if "enter" in normalized_keys and session is not None and any(
+                h == input_handle for h, _body in session.message_inputs):
+            return {"ok": False, "status": "previous_send_unconfirmed", "retryable": False,
+                    "error": "此窗口已执行消息输入；不能用裸回车重新提交，请只读核验。"}
         target_title = str(target.title) if target is not None else _foreground_window_title()
         if (_is_message_routing_window_title(target_title) and "enter" in normalized_keys
                 and not is_document_text_input({"handle": handle})):
