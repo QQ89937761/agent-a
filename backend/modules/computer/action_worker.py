@@ -188,8 +188,10 @@ def serve():
             os._exit(0)
     threading.Thread(target=read, daemon=True).start()
     memory = SharedMemory(name=incoming.get()["memory"])
-    # Input-only worker never does OpenCV template matching; avoid its native thread pools.
-    sys.modules["cv2"] = None
+    # Input-only worker needs no screenshots or dialogs. Pillow can import NumPy
+    # before PyScreeze reaches OpenCV; skip the whole optional image/UI chain.
+    for module in ("cv2", "pyscreeze", "mouseinfo", "pymsgbox"):
+        sys.modules[module] = None
     import pyautogui as pg
     pg.FAILSAFE = False
     def check_parent():

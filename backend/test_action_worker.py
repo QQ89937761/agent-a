@@ -120,9 +120,18 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
         memory = SharedMemory(create=True, size=520)
         root = Path(__file__).resolve().parent.parent
         diagnostics = tempfile.TemporaryFile()
-        program = ("import faulthandler,runpy,sys; faulthandler.enable(); "
-                   "faulthandler.dump_traceback_later(10, repeat=False); "
-                   "entry=sys.argv.pop(1); runpy.run_path(entry,run_name='__main__')")
+        program = """
+import faulthandler, runpy, sys
+class NoImageImports:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in {"PIL", "numpy", "cv2", "pyscreeze", "mouseinfo", "pymsgbox"}:
+            raise RuntimeError("input worker must not load " + fullname)
+sys.meta_path.insert(0, NoImageImports())
+faulthandler.enable()
+faulthandler.dump_traceback_later(10, repeat=False)
+entry = sys.argv.pop(1)
+runpy.run_path(entry, run_name="__main__")
+"""
         process = await asyncio.create_subprocess_exec(sys.executable, "-u", "-c", program, str(root / "xiaoa_backend.py"),
             "--desktop-worker", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=diagnostics, **hidden_subprocess_kwargs())
