@@ -59,6 +59,16 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(system_control._CONTROL_LOCK.locked())
                     self.assertFalse(system_control.foreground_control_active())
                     self.assertEqual([True, False], notices)
+                    if reason == "timeout":
+                        self.assertFalse(token.session.revoked.is_set())
+                        recovered = await system_control.acquire_control(.3)
+                        self.assertIsNotNone(recovered)
+                        self.assertIs(token.session, recovered.session)
+                        self.assertEqual(42, await system_control.run_controlled(recovered, lambda: 42))
+                        system_control.release_control(recovered, force=True)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "控制权已交还"):
+                            await system_control.acquire_control(.1)
                 finally:
                     worker.close()
                     system_control.reset_foreground_notice_callback(context)
@@ -67,6 +77,108 @@ class ActionWorkerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(system_control.release_control(token), "late cleanup must not release new owner")
                 self.assertIs(system_control._CONTROL_OWNER, replacement)
                 system_control.release_control(replacement, force=True)
+
+    async def test_tool_error_closes_child_but_preserves_task_and_allows_recovery(self):
+        with patch.object(system_control, "ensure_listener"), patch.object(system_control, "stop_listener"):
+            context = system_control.set_foreground_notice_callback(None, on_escape=lambda: None)
+            worker = ActionWorker()
+            worker.process = subprocess.Popen([sys.executable, "-u", "-c",
+                "import sys; sys.stdin.readline(); print('{\"error\":\"input_target_missing\"}',flush=True); sys.stdin.read()"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, **hidden_subprocess_kwargs())
+            process = worker.process
+            token = await system_control.acquire_control(.2)
+            token.session.sends["test"] = (time.monotonic(), "unknown")
+            try:
+                with patch("backend.modules.computer.action_worker.describe", return_value={"kind": "test"}), patch(
+                        "backend.modules.computer.action_worker.ActionWorker", return_value=worker), patch.object(system_control, "_IS_WINDOWS", True):
+                    with self.assertRaisesRegex(RuntimeError, "input_target_missing"):
+                        await system_control.run_controlled(token, lambda: None)
+                self.assertIsNotNone(process.poll())
+                self.assertFalse(token.session.revoked.is_set())
+                replacement = await system_control.acquire_control(.2)
+                self.assertIs(token.session, replacement.session)
+                self.assertIn("test", replacement.session.sends)
+                self.assertEqual(42, await system_control.run_controlled(replacement, lambda: 42))
+                self.assertFalse(system_control.release_control(token), "old cleanup must not release recovered lease")
+                self.assertIs(replacement, system_control._CONTROL_OWNER)
+            finally:
+                worker.close()
+                system_control.reset_foreground_notice_callback(context)
+
+    async def test_thread_timeout_invalidates_old_input_without_revoking_task(self):
+        with patch.object(system_control, "ensure_listener"), patch.object(system_control, "stop_listener"):
+            context = system_control.set_foreground_notice_callback(None, on_escape=lambda: None)
+            token = await system_control.acquire_control(.2)
+            finish = threading.Event()
+            entered = threading.Event()
+            def blocked():
+                entered.set()
+                finish.wait(3)
+                system_control.check_foreground_permission()
+            try:
+                with self.assertRaisesRegex(TimeoutError, "desktop_call_timeout"):
+                    await system_control.run_controlled(token, blocked, timeout=.1)
+                self.assertTrue(entered.is_set())
+                self.assertFalse(token.session.revoked.is_set())
+                self.assertIsNone(await system_control.acquire_control(.1))
+                old_worker = token.worker
+                finish.set()
+                with self.assertRaisesRegex(RuntimeError, "desktop_action_released"):
+                    await old_worker
+                replacement = await system_control.acquire_control(.3)
+                self.assertIsNotNone(replacement)
+                self.assertEqual(42, await system_control.run_controlled(replacement, lambda: 42))
+            finally:
+                finish.set()
+                if token.worker is not None:
+                    await asyncio.gather(token.worker, return_exceptions=True)
+                system_control.reset_foreground_notice_callback(context)
+
+    async def test_failed_child_cleanup_never_reuses_or_unlocks_cancelled_lease(self):
+        with patch.object(system_control, "ensure_listener"), patch.object(system_control, "stop_listener"):
+            context = system_control.set_foreground_notice_callback(None, on_escape=lambda: None)
+            token = await system_control.acquire_control(.2)
+            token.actions = Mock()
+            token.actions.close.side_effect = RuntimeError("cleanup failed")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                    system_control.release_control(token, force=True)
+                self.assertFalse(token.session.revoked.is_set())
+                self.assertTrue(system_control._CONTROL_LOCK.locked())
+                self.assertIsNone(await system_control.acquire_control(.1))
+                self.assertIsNone(await asyncio.to_thread(system_control.acquire_control_sync, .1))
+                action = Mock()
+                with self.assertRaisesRegex(RuntimeError, "token"):
+                    await system_control.run_controlled(token, action)
+                action.assert_not_called()
+            finally:
+                token.actions.close.side_effect = None
+                system_control.reset_foreground_notice_callback(context)
+
+    async def test_cancelled_thread_revokes_task_until_thread_exits(self):
+        with patch.object(system_control, "ensure_listener"), patch.object(system_control, "stop_listener"):
+            context = system_control.set_foreground_notice_callback(None, on_escape=lambda: None)
+            token = await system_control.acquire_control(.2)
+            entered, finish = threading.Event(), threading.Event()
+            def blocked():
+                entered.set()
+                finish.wait(3)
+                system_control.check_foreground_permission()
+            task = asyncio.create_task(system_control.run_controlled(token, blocked))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                self.assertTrue(token.session.revoked.is_set())
+                self.assertTrue(system_control._CONTROL_LOCK.locked())
+                with self.assertRaisesRegex(RuntimeError, "控制权已交还"):
+                    await system_control.acquire_control(.1)
+            finally:
+                finish.set()
+                if token.worker is not None:
+                    await asyncio.gather(token.worker, return_exceptions=True)
+                system_control.reset_foreground_notice_callback(context)
 
     async def test_idle_child_does_not_allow_unlocking_a_live_thread_fallback(self):
         token = await system_control.acquire_control(.2, foreground=False)

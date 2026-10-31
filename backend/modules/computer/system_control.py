@@ -62,6 +62,12 @@ _CONTROL_SESSION: contextvars.ContextVar[ControlSession | None] = contextvars.Co
 )
 
 
+# A failed action may lose its lease without cancelling the whole agent task.
+_INPUT_CONTROL: contextvars.ContextVar[ControlToken | None] = contextvars.ContextVar(
+    "input_control", default=None,
+)
+
+
 # Optional task-scoped guard, installed only by bounded desktop plans. Original
 # individual tools retain their existing focus-recovery behavior.
 INPUT_PRECONDITION: contextvars.ContextVar[Callable[..., None] | None] = contextvars.ContextVar(
@@ -101,6 +107,9 @@ def check_foreground_permission() -> None:
     session = _CONTROL_SESSION.get()
     if session is not None and session.revoked.is_set():
         raise RuntimeError("桌面控制权已交还用户，本任务不能再次操作鼠标键盘")
+    action = _INPUT_CONTROL.get()
+    if action is not None and action.cancelled.is_set():
+        raise RuntimeError("desktop_action_released: 本次桌面操作已结束，旧操作不能继续输入")
 
 
 def _escape_foreground(expected: ControlToken | None = None) -> None:
@@ -169,7 +178,7 @@ def _notify_foreground(token: ControlToken, active: bool) -> None:
 class ControlToken:
     """Capability token for one foreground-control lease."""
 
-    __slots__ = ("worker", "release_requested", "notice_callback", "session", "foreground", "abandoned", "actions", "worker_isolated")
+    __slots__ = ("worker", "release_requested", "notice_callback", "session", "foreground", "abandoned", "actions", "worker_isolated", "cancelled")
 
     def __init__(self) -> None:
         self.worker: asyncio.Task[Any] | None = None
@@ -180,6 +189,7 @@ class ControlToken:
         self.abandoned = False
         self.actions = None
         self.worker_isolated = False
+        self.cancelled = threading.Event()
 
 
 # 用户叫法和真实窗口标题并不总一致（Codex 桌面版当前显示为 ChatGPT）。
@@ -596,6 +606,8 @@ async def acquire_control(timeout: float = 8.0, *, foreground: bool = True) -> C
     check_foreground_permission()
     if session is not None:
         if session.control is not None and _CONTROL_OWNER is session.control:
+            if session.control.cancelled.is_set():
+                return None  # Cleanup has not confirmed that the old input stopped.
             if foreground:
                 activate_foreground(session.control)
             return session.control
@@ -633,6 +645,8 @@ def acquire_control_sync(timeout: float = 8.0, *, foreground: bool = True) -> Co
     check_foreground_permission()
     if session is not None:
         if session.control is not None and _CONTROL_OWNER is session.control:
+            if session.control.cancelled.is_set():
+                return None  # Cleanup has not confirmed that the old input stopped.
             if foreground:
                 activate_foreground(session.control)
             return session.control
@@ -664,7 +678,8 @@ def activate_foreground(token: ControlToken) -> None:
     """Promote a silent UIA lease only when foreground keyboard/mouse input is needed."""
     check_foreground_permission()
     with _CONTROL_STATE_LOCK:
-        if _CONTROL_OWNER is not token or (token.session is not None and token.session.revoked.is_set()):
+        if (_CONTROL_OWNER is not token or token.cancelled.is_set()
+                or (token.session is not None and token.session.revoked.is_set())):
             raise RuntimeError("前台控制 token 已失效")
         if token.session is not None:
             ensure_listener(lambda: _escape_foreground(token))
@@ -674,7 +689,10 @@ def activate_foreground(token: ControlToken) -> None:
 
 
 def release_control(token: ControlToken, *, force: bool = False) -> bool:
-    """Kill isolated native work before unlocking; never release a live thread fallback."""
+    """Release this lease, not the task's permission; callers explicitly revoke on stop.
+
+    Kill isolated native work before unlocking; never release a live thread fallback.
+    """
     global _CONTROL_OWNER
     with _CONTROL_STATE_LOCK:
         if _CONTROL_OWNER is not token:
@@ -682,9 +700,9 @@ def release_control(token: ControlToken, *, force: bool = False) -> bool:
             return False
         if token.foreground and token.session is not None and not force and not token.session.revoked.is_set():
             return True
+        if force:
+            token.cancelled.set()
         if token.actions is not None:
-            if force and token.session is not None:
-                token.session.revoked.set()
             token.actions.close()  # Terminate native input before releasing its lease.
             if token.worker_isolated:
                 token.worker = None  # The killed pipe reader cannot affect a new lease.
@@ -692,8 +710,6 @@ def release_control(token: ControlToken, *, force: bool = False) -> bool:
             token.release_requested = True
             if force:
                 token.abandoned = True
-                if token.session is not None:
-                    token.session.revoked.set()
                 _CONTROL_OWNER = None
                 if token.foreground:
                     _notify_foreground(token, False)
@@ -743,7 +759,7 @@ async def run_controlled(
     """Run production input in a killable child; local callables retain a safe thread lease."""
     check_foreground_permission()
     with _CONTROL_STATE_LOCK:
-        if _CONTROL_OWNER is not token:
+        if _CONTROL_OWNER is not token or token.cancelled.is_set():
             raise RuntimeError("前台控制 token 已失效")
         if token.worker is not None:
             raise RuntimeError("同一前台控制 token 已有操作在执行")
@@ -758,7 +774,7 @@ async def run_controlled(
                 token.actions = ActionWorker()
             worker = asyncio.create_task(asyncio.to_thread(token.actions.execute, action, descriptor))
         else:
-            worker = asyncio.create_task(asyncio.to_thread(_run_controlled_input, function, args, kwargs))
+            worker = asyncio.create_task(asyncio.to_thread(_run_with_control, token, function, args, kwargs))
         token.worker = worker
         token.worker_isolated = action is not None
     worker.add_done_callback(lambda done: _control_worker_done(token, done))
@@ -769,7 +785,9 @@ async def run_controlled(
         async with deadline:
             return await asyncio.shield(worker)
     except asyncio.CancelledError:
-        if token.actions is not None:
+        if token.session is not None:
+            token.session.revoked.set()
+        if token.actions is not None or token.session is not None:
             release_control(token, force=True)
         raise
     except TimeoutError as exc:
@@ -778,11 +796,22 @@ async def run_controlled(
         release_control(token, force=True)
         _LOGGER.error("desktop call timed out after %.1fs: %s.%s", timeout_seconds,
                       getattr(function, "__module__", ""), getattr(function, "__name__", repr(function)))
-        raise TimeoutError("desktop_call_timeout") from exc
+        raise TimeoutError(
+            "desktop_call_timeout: 本次桌面调用超时，执行结果可能不完整；"
+            "任务仍可继续，后续操作需等旧执行退出。可重新观察实际状态后自主选择工具，勿直接重放结果未知的提交。"
+        ) from exc
     except Exception:
         if token.actions is not None:
             release_control(token, force=True)
         raise
+
+
+def _run_with_control(token: ControlToken, function, args, kwargs):
+    context = _INPUT_CONTROL.set(token)
+    try:
+        return _run_controlled_input(function, args, kwargs)
+    finally:
+        _INPUT_CONTROL.reset(context)
 
 
 def _run_controlled_input(function, args, kwargs):
